@@ -477,7 +477,7 @@ function JudgeConnectPanel({ tournament }: { tournament: any }) {
     return window.location.origin;
   };
 
-  const getRoleUrl = (role: string) => `${getBase()}/judging?role=${role}`;
+  const getRoleUrl = (role: string) => `${getBase()}/judging?role=${role}&t=${tournament?.id ?? ''}`;
 
   return (
     <Card className="overflow-hidden border-primary/20">

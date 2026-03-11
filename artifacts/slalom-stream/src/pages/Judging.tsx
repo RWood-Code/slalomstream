@@ -22,6 +22,14 @@ function usePreselectedRole(): string | null {
   return new URLSearchParams(window.location.search).get('role');
 }
 
+// Read ?t= tournament ID from the URL (embedded in judge station QR codes)
+function useUrlTournamentId(): number | null {
+  if (typeof window === 'undefined') return null;
+  const raw = new URLSearchParams(window.location.search).get('t');
+  const n = raw ? parseInt(raw, 10) : NaN;
+  return Number.isNaN(n) ? null : n;
+}
+
 // ─── Judge A / Chief: Start Pass Panel ────────────────────────────────────────
 function StartPassPanel({ tournamentId }: { tournamentId: number }) {
   const queryClient = useQueryClient();
@@ -515,9 +523,13 @@ export default function Judging() {
   const { toast } = useToast();
 
   const preselectedRole = usePreselectedRole();
+  const urlTournamentId = useUrlTournamentId();
 
-  const { data: tournament } = useGetTournament(activeTournamentId || 0, {
-    query: { enabled: !!activeTournamentId },
+  // URL ?t= param takes priority over store — lets QR codes work on fresh devices
+  const tournamentId = urlTournamentId ?? activeTournamentId;
+
+  const { data: tournament } = useGetTournament(tournamentId || 0, {
+    query: { enabled: !!tournamentId },
   });
 
   const judgeCount = tournament?.judge_count ?? 1;
@@ -529,8 +541,8 @@ export default function Judging() {
     ...(judgeCount > 1 ? [{ value: 'chief_judge', label: 'Chief Judge' }] : []),
   ];
 
-  const { data: passes, refetch: refetchPasses } = useListPasses(activeTournamentId || 0, {
-    query: { enabled: !!activeTournamentId },
+  const { data: passes, refetch: refetchPasses } = useListPasses(tournamentId || 0, {
+    query: { enabled: !!tournamentId },
     request: { refetchInterval: 3000 } as any,
   });
 
@@ -539,7 +551,7 @@ export default function Judging() {
     mutation: {
       onSuccess: () => {
         toast({ title: 'Score submitted!' });
-        queryClient.invalidateQueries({ queryKey: ['/api/tournaments', activeTournamentId, 'passes'] });
+        queryClient.invalidateQueries({ queryKey: ['/api/tournaments', tournamentId, 'passes'] });
       }
     }
   });
@@ -553,7 +565,7 @@ export default function Judging() {
   const activePassId = activePass?.id;
   useEffect(() => { setSubmittedScore(null); }, [activePassId]);
 
-  if (!activeTournamentId) {
+  if (!tournamentId) {
     return (
       <div className="max-w-md mx-auto mt-20 text-center space-y-4 px-4">
         <p className="text-xl text-muted-foreground">No active tournament.</p>
@@ -573,7 +585,7 @@ export default function Judging() {
       e.preventDefault();
       if (!loginRole || !pin) return;
       verifyMutation.mutate(
-        { data: { tournament_id: activeTournamentId, pin } },
+        { data: { tournament_id: tournamentId, pin } },
         {
           onSuccess: (data) => {
             setJudgeSession(data.id, loginRole, data.name);
@@ -663,7 +675,7 @@ export default function Judging() {
   if (activeJudgeRole === 'chief_judge') {
     return (
       <ChiefJudgeView
-        tournamentId={activeTournamentId}
+        tournamentId={tournamentId}
         judgeCount={judgeCount}
         activeJudgeName={activeJudgeName}
       />
@@ -680,7 +692,7 @@ export default function Judging() {
     submitMutation.mutate({
       id: activePass.id,
       data: {
-        tournament_id: activeTournamentId,
+        tournament_id: tournamentId,
         judge_id: activeJudgeId,
         judge_name: activeJudgeName,
         judge_role: activeJudgeRole,
@@ -759,7 +771,7 @@ export default function Judging() {
                 </button>
                 {judgeAOpen && (
                   <div className="border-t px-4 pb-4 pt-3">
-                    <ActivePassControls pass={activePass} tournamentId={activeTournamentId} />
+                    <ActivePassControls pass={activePass} tournamentId={tournamentId} />
                   </div>
                 )}
               </Card>
@@ -777,7 +789,7 @@ export default function Judging() {
               </button>
               {judgeAOpen && (
                 <div className="border-t px-4 pb-4 pt-3">
-                  <StartPassPanel tournamentId={activeTournamentId} />
+                  <StartPassPanel tournamentId={tournamentId} />
                 </div>
               )}
             </Card>
