@@ -13,6 +13,8 @@ export const officialsRegisterTable = pgTable("officials_register", {
   pin: text("pin"),
   /** Default judge role when no per-tournament assignment exists */
   judge_role: text("judge_role"),
+  /** When true, this official can authenticate to the Admin panel using their judge PIN */
+  is_admin: boolean("is_admin").notNull().default(false),
   created_at: timestamp("created_at").notNull().defaultNow(),
 });
 

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAppStore } from '@/lib/store';
 import { useListSkiers, useCreateSkier, useListJudges, useCreateJudge, useVerifyAdminPin } from '@workspace/api-client-react';
 import { Card, Button, PageHeader, Input, Select, Badge } from '@/components/ui/shared';
-import { Settings, Shield, UserPlus, Radio, CheckCircle2, XCircle, Copy, RefreshCw, Trash2, Key, Waves, Plug, PlugZap, Download, Globe, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { Settings, Shield, UserPlus, Radio, CheckCircle2, XCircle, Copy, RefreshCw, Trash2, Key, Waves, Plug, PlugZap, Download, Globe, AlertCircle, ChevronDown, ChevronUp, Eye, EyeOff, Wand2, ShieldCheck } from 'lucide-react';
 import { useQueryClient, useQuery, useMutation } from '@tanstack/react-query';
 import { DIVISIONS, JUDGE_ROLES } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
@@ -60,6 +60,7 @@ export default function Admin() {
 
       <AppSettingsPanel />
       <SurePathPanel />
+      <OfficialsPinsPanel />
 
       {!activeTournamentId ? (
         <Card className="p-8 text-center text-muted-foreground">Select an active tournament from the Home page to manage its roster and judges.</Card>
@@ -800,6 +801,246 @@ const ROLE_LABELS: Record<string, string> = {
   judge_e: 'Judge E',
   chief_judge: 'Chief Judge',
 };
+
+type Official = {
+  id: number;
+  first_name: string;
+  surname: string;
+  region: string;
+  slalom_grade: string | null;
+  pin: string | null;
+  judge_role: string | null;
+  is_admin: boolean;
+  is_active: boolean;
+};
+
+function OfficialsPinsPanel() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: officials = [], isLoading, refetch } = useQuery<Official[]>({
+    queryKey: ['officials'],
+    queryFn: async () => { const r = await fetch('/api/officials'); return r.json(); },
+  });
+
+  const active = officials.filter(o => o.is_active).sort((a, b) => a.surname.localeCompare(b.surname));
+  const withPin = active.filter(o => o.pin).length;
+  const withoutPin = active.length - withPin;
+
+  const [revealAll, setRevealAll] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editPin, setEditPin] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [autoAssigning, setAutoAssigning] = useState(false);
+  const [lastAutoCount, setLastAutoCount] = useState<number | null>(null);
+
+  const handleAutoAssign = async () => {
+    setAutoAssigning(true);
+    setLastAutoCount(null);
+    try {
+      const r = await fetch('/api/officials/auto-assign-pins', { method: 'POST' });
+      const data = await r.json();
+      setLastAutoCount(data.assigned);
+      toast({ title: `PINs auto-assigned to ${data.assigned} official${data.assigned !== 1 ? 's' : ''}` });
+      refetch();
+    } catch {
+      toast({ title: 'Auto-assign failed', variant: 'destructive' });
+    } finally {
+      setAutoAssigning(false);
+    }
+  };
+
+  const openEdit = (o: Official) => {
+    setEditingId(o.id);
+    setEditPin(o.pin ?? '');
+  };
+
+  const savePin = async (official: Official) => {
+    setSaving(true);
+    try {
+      const r = await fetch(`/api/officials/${official.id}/pin`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: editPin }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const updated = await r.json();
+      queryClient.setQueryData<Official[]>(['officials'], prev =>
+        prev ? prev.map(o => o.id === updated.id ? updated : o) : prev
+      );
+      toast({ title: 'PIN updated' });
+      setEditingId(null);
+    } catch (e: any) {
+      toast({ title: e.message || 'Save failed', variant: 'destructive' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleAdmin = async (official: Official) => {
+    const newVal = !official.is_admin;
+    try {
+      const r = await fetch(`/api/officials/${official.id}/pin`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_admin: newVal }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const updated = await r.json();
+      queryClient.setQueryData<Official[]>(['officials'], prev =>
+        prev ? prev.map(o => o.id === updated.id ? updated : o) : prev
+      );
+      toast({ title: newVal ? `${official.first_name} ${official.surname} is now an admin` : 'Admin access removed' });
+    } catch (e: any) {
+      toast({ title: e.message || 'Save failed', variant: 'destructive' });
+    }
+  };
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="p-5 border-b bg-muted/30 flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <Key className="w-5 h-5 text-primary" />
+          <div>
+            <h3 className="font-bold text-base">Officials PINs</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {withPin} of {active.length} officials have a PIN
+              {withoutPin > 0 && <span className="text-amber-600 font-semibold"> · {withoutPin} without</span>}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setRevealAll(v => !v)}
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1.5 rounded-lg hover:bg-muted"
+          >
+            {revealAll ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            {revealAll ? 'Hide PINs' : 'Reveal PINs'}
+          </button>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleAutoAssign}
+            isLoading={autoAssigning}
+            className="flex items-center gap-1.5"
+          >
+            <Wand2 className="w-3.5 h-3.5" />
+            Auto-assign PINs
+          </Button>
+        </div>
+      </div>
+
+      {lastAutoCount !== null && lastAutoCount > 0 && (
+        <div className="px-5 py-3 bg-emerald-50 dark:bg-emerald-900/20 border-b border-emerald-200 dark:border-emerald-800 flex items-center gap-2 text-emerald-700 dark:text-emerald-300 text-sm font-medium">
+          <CheckCircle2 className="w-4 h-4" />
+          {lastAutoCount} new PINs generated — reveal and distribute to officials
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className="p-8 text-center text-muted-foreground">Loading…</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm text-left">
+            <thead className="bg-muted/50 text-muted-foreground uppercase text-[10px] font-bold tracking-wider">
+              <tr>
+                <th className="px-4 py-3">Name</th>
+                <th className="px-4 py-3">Grade</th>
+                <th className="px-4 py-3">Region</th>
+                <th className="px-4 py-3">PIN</th>
+                <th className="px-4 py-3 text-center">Admin</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {active.map(o => (
+                <tr key={o.id} className={`hover:bg-muted/30 transition-colors ${o.is_admin ? 'bg-primary/5' : ''}`}>
+                  <td className="px-4 py-2.5 font-semibold whitespace-nowrap">
+                    {o.first_name} {o.surname}
+                    {o.is_admin && (
+                      <span className="ml-2 inline-flex items-center gap-1 text-[10px] font-bold text-primary bg-primary/10 px-1.5 py-0.5 rounded uppercase tracking-wide">
+                        <ShieldCheck className="w-2.5 h-2.5" /> Admin
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5 text-muted-foreground text-xs">{o.slalom_grade ?? '—'}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground text-xs">{o.region}</td>
+                  <td className="px-4 py-2.5">
+                    {editingId === o.id ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          maxLength={6}
+                          autoFocus
+                          autoComplete="new-password"
+                          name={`pin-edit-${o.id}`}
+                          className="h-8 w-20 border border-input rounded-lg px-2 text-sm font-mono bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          placeholder="1234"
+                          value={editPin}
+                          onChange={e => setEditPin(e.target.value)}
+                        />
+                        <button
+                          onClick={() => savePin(o)}
+                          disabled={saving}
+                          className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded-lg font-bold disabled:opacity-50"
+                        >
+                          {saving ? '…' : 'Save'}
+                        </button>
+                        <button
+                          onClick={() => setEditingId(null)}
+                          className="text-xs px-2 py-1 text-muted-foreground hover:text-foreground"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        {o.pin ? (
+                          <span className="font-mono text-sm bg-muted px-2 py-0.5 rounded tracking-widest">
+                            {revealAll ? o.pin : '••••'}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground italic">no PIN</span>
+                        )}
+                        <button
+                          onClick={() => openEdit(o)}
+                          className="text-[11px] text-primary hover:underline font-semibold"
+                        >
+                          {o.pin ? 'Change' : 'Set PIN'}
+                        </button>
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5 text-center">
+                    <button
+                      onClick={() => toggleAdmin(o)}
+                      title={o.is_admin ? 'Remove admin access' : 'Grant admin access (uses their judge PIN)'}
+                      className={`w-5 h-5 rounded border-2 flex items-center justify-center mx-auto transition-colors ${
+                        o.is_admin
+                          ? 'bg-primary border-primary text-primary-foreground'
+                          : 'border-border bg-background hover:border-primary/50'
+                      }`}
+                    >
+                      {o.is_admin && <CheckCircle2 className="w-3 h-3" />}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="px-5 py-3 border-t bg-muted/20">
+        <p className="text-xs text-muted-foreground">
+          <strong>Auto-assign PINs</strong> generates a unique 4-digit PIN for every official who doesn't have one.
+          Toggle <strong>Admin</strong> to let an official log into this Admin panel using their judge PIN.
+          PINs are used to log into the Judging page — hand them to each official before the tournament.
+        </p>
+      </div>
+    </Card>
+  );
+}
 
 function JudgeManagement({ tournamentId }: { tournamentId: number }) {
   const queryClient = useQueryClient();

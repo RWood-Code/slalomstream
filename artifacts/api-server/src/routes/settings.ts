@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { appSettingsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { appSettingsTable, officialsRegisterTable } from "@workspace/db";
+import { eq, and } from "drizzle-orm";
 import { startSurePathClient, stopSurePathClient } from "../services/surepath-client";
 
 const router = Router();
@@ -63,8 +63,30 @@ export const adminRouter = Router();
 adminRouter.post("/verify-pin", async (req, res) => {
   const { pin } = req.body;
   const settings = await getOrCreateSettings();
-  if (!settings.admin_pin) return res.json({ valid: true });
+
+  // No admin PIN configured → open access
+  if (!settings.admin_pin) {
+    // Still allow if the pin matches an official admin PIN
+    const officialAdmin = await db
+      .select()
+      .from(officialsRegisterTable)
+      .where(and(eq(officialsRegisterTable.is_admin, true), eq(officialsRegisterTable.pin, String(pin))))
+      .limit(1);
+    if (officialAdmin.length > 0) return res.json({ valid: true, admin_name: `${officialAdmin[0].first_name} ${officialAdmin[0].surname}` });
+    return res.json({ valid: true });
+  }
+
+  // Check global admin PIN
   if (settings.admin_pin === String(pin)) return res.json({ valid: true });
+
+  // Check official admin PINs
+  const officialAdmin = await db
+    .select()
+    .from(officialsRegisterTable)
+    .where(and(eq(officialsRegisterTable.is_admin, true), eq(officialsRegisterTable.pin, String(pin))))
+    .limit(1);
+  if (officialAdmin.length > 0) return res.json({ valid: true, admin_name: `${officialAdmin[0].first_name} ${officialAdmin[0].surname}` });
+
   res.status(401).json({ valid: false });
 });
 
