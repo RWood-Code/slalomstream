@@ -9,6 +9,7 @@ import settingsRouter, { adminRouter } from "./settings";
 import networkRouter from "./network";
 import waterskiconnectRouter from "./waterskiconnect";
 import officialsRouter from "./officials";
+import emsRouter from "./ems";
 
 const router = Router();
 
@@ -27,5 +28,6 @@ router.use("/judges", judgeRouter);
 router.use("/settings", settingsRouter);
 router.use("/admin", adminRouter);
 router.use("/officials", officialsRouter);
+router.use("/ems", emsRouter);
 
 export default router;

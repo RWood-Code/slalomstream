@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAppStore } from '@/lib/store';
 import { useListSkiers, useCreateSkier, useListJudges, useCreateJudge, useVerifyAdminPin } from '@workspace/api-client-react';
 import { Card, Button, PageHeader, Input, Select, Badge } from '@/components/ui/shared';
-import { Settings, Shield, UserPlus, Radio, CheckCircle2, XCircle, Copy, RefreshCw, Trash2, Key, Waves, Plug, PlugZap } from 'lucide-react';
+import { Settings, Shield, UserPlus, Radio, CheckCircle2, XCircle, Copy, RefreshCw, Trash2, Key, Waves, Plug, PlugZap, Download, Globe, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import { useQueryClient, useQuery, useMutation } from '@tanstack/react-query';
 import { DIVISIONS, JUDGE_ROLES } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
@@ -62,10 +62,13 @@ export default function Admin() {
       {!activeTournamentId ? (
         <Card className="p-8 text-center text-muted-foreground">Select an active tournament from the Home page to manage its roster and judges.</Card>
       ) : (
-        <div className="grid lg:grid-cols-2 gap-8">
-          <SkierManagement tournamentId={activeTournamentId} />
-          <JudgeManagement tournamentId={activeTournamentId} />
-        </div>
+        <>
+          <EmsImportPanel tournamentId={activeTournamentId} />
+          <div className="grid lg:grid-cols-2 gap-8">
+            <SkierManagement tournamentId={activeTournamentId} />
+            <JudgeManagement tournamentId={activeTournamentId} />
+          </div>
+        </>
       )}
     </div>
   );
@@ -478,6 +481,246 @@ function SurePathPanel() {
           <strong>Setup in SurePath:</strong> Select Boat Lane Mode → Tournament Settings → set Scoring Server to "WaterskiConnect", then enter the same Event Name and Sub ID here. The Observer PIN is displayed once connected in your scoring software.
         </p>
       </div>
+    </Card>
+  );
+}
+
+// ─── IWWF EMS Import Panel ─────────────────────────────────────────────────────
+interface EmsParticipant {
+  first_name: string;
+  surname: string;
+  country: string;
+  category: string;
+  division: string;
+  yob: number | null;
+  events: string[];
+}
+interface EmsResult {
+  code: string;
+  name: string;
+  site: string;
+  date: string;
+  details_url: string;
+  participant_count: number;
+  participants: EmsParticipant[];
+}
+
+function EmsImportPanel({ tournamentId }: { tournamentId: number }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const createSkier = useCreateSkier({ mutation: {} });
+
+  const [open, setOpen] = useState(false);
+  const [code, setCode] = useState('');
+  const [result, setResult] = useState<EmsResult | null>(null);
+  const [fetching, setFetching] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [fetchHint, setFetchHint] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [importing, setImporting] = useState(false);
+  const [imported, setImported] = useState<number>(0);
+
+  const fetchEms = async () => {
+    if (!code.trim()) return;
+    setFetching(true);
+    setFetchError(null);
+    setFetchHint(null);
+    setResult(null);
+    setSelected(new Set());
+    setImported(0);
+    try {
+      const res = await fetch(`/api/ems/search?code=${encodeURIComponent(code.trim())}`);
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.hint) setFetchHint(data.hint);
+        throw new Error(data.error || 'EMS lookup failed');
+      }
+      setResult(data);
+      // Select all slalom participants by default
+      const slalomIdxs = data.participants
+        .map((_p: EmsParticipant, i: number) => i)
+        .filter((i: number) => data.participants[i].events.includes('Slalom'));
+      setSelected(new Set(slalomIdxs.length > 0 ? slalomIdxs : data.participants.map((_p: EmsParticipant, i: number) => i)));
+    } catch (err: any) {
+      setFetchError(err.message);
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  const toggleAll = () => {
+    if (result) {
+      if (selected.size === result.participants.length) setSelected(new Set());
+      else setSelected(new Set(result.participants.map((_, i) => i)));
+    }
+  };
+
+  const importSelected = async () => {
+    if (!result) return;
+    setImporting(true);
+    let count = 0;
+    const toImport = result.participants.filter((_, i) => selected.has(i));
+    for (const p of toImport) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          createSkier.mutate({
+            id: tournamentId,
+            data: {
+              first_name: p.first_name || 'Unknown',
+              surname: p.surname || p.first_name,
+              division: p.division,
+              country: p.country || 'NZL',
+            }
+          }, { onSuccess: () => { count++; resolve(); }, onError: reject });
+        });
+      } catch {
+        // skip duplicates
+      }
+    }
+    setImported(count);
+    setImporting(false);
+    queryClient.invalidateQueries({ queryKey: ['/api/tournaments', tournamentId, 'skiers'] });
+    toast({ title: `Imported ${count} of ${toImport.length} participants`, description: `From EMS: ${result.name}` });
+  };
+
+  return (
+    <Card className="overflow-hidden border-blue-200 dark:border-blue-900">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between p-4 hover:bg-muted/40 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
+            <Globe className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+          </div>
+          <div className="text-left">
+            <p className="font-bold text-sm">Import from IWWF EMS</p>
+            <p className="text-[11px] text-muted-foreground">Bulk-import participants from ems.iwwf.sport using a tournament sanction code</p>
+          </div>
+        </div>
+        {open ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+      </button>
+
+      {open && (
+        <div className="border-t p-5 space-y-4">
+          {/* Code search */}
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <Input
+                label="EMS Code or Competition URL"
+                placeholder="26NZL018  or  paste full ems.iwwf.sport URL"
+                value={code}
+                onChange={e => setCode(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') fetchEms(); }}
+              />
+            </div>
+            <div className="flex items-end">
+              <Button
+                variant="primary"
+                onClick={fetchEms}
+                isLoading={fetching}
+                disabled={!code.trim()}
+                className="mb-0.5"
+              >
+                Search
+              </Button>
+            </div>
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            Enter a sanction code (e.g. <strong>26NZL018</strong>) or paste the full competition URL from ems.iwwf.sport. Slalom participants are pre-selected automatically.
+          </p>
+
+          {/* Error */}
+          {fetchError && (
+            <div className="space-y-2">
+              <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>{fetchError}</span>
+              </div>
+              {fetchHint && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-xs">
+                  <p className="font-bold mb-1">Tip:</p>
+                  <p>{fetchHint}</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Results */}
+          {result && (
+            <div className="space-y-4">
+              {/* Competition info */}
+              <div className="p-3 bg-blue-50 dark:bg-blue-950/30 rounded-xl border border-blue-100 dark:border-blue-900">
+                <p className="font-bold text-sm text-blue-900 dark:text-blue-100">{result.name}</p>
+                <div className="flex flex-wrap gap-3 mt-1 text-xs text-blue-700 dark:text-blue-300">
+                  {result.site && <span>📍 {result.site}</span>}
+                  {result.date && <span>📅 {result.date}</span>}
+                  <span className="font-mono bg-blue-100 dark:bg-blue-900 px-1.5 py-0.5 rounded">{result.code}</span>
+                </div>
+                <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">{result.participant_count} participants found</p>
+              </div>
+
+              {/* Participant list */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-sm font-bold">{selected.size} of {result.participants.length} selected</p>
+                  <button onClick={toggleAll} className="text-xs text-primary hover:underline font-medium">
+                    {selected.size === result.participants.length ? 'Deselect all' : 'Select all'}
+                  </button>
+                </div>
+                <div className="max-h-72 overflow-y-auto rounded-xl border divide-y">
+                  {result.participants.map((p, i) => (
+                    <label key={i} className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-muted/40 transition-colors ${!selected.has(i) ? 'opacity-50' : ''}`}>
+                      <input
+                        type="checkbox"
+                        checked={selected.has(i)}
+                        onChange={() => setSelected(prev => {
+                          const next = new Set(prev);
+                          next.has(i) ? next.delete(i) : next.add(i);
+                          return next;
+                        })}
+                        className="rounded accent-primary"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold truncate">
+                          {p.first_name} {p.surname}
+                          <span className="text-[10px] text-muted-foreground ml-1">{p.country}</span>
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">{p.division}</p>
+                      </div>
+                      <div className="flex gap-1 flex-shrink-0">
+                        {p.events.map(ev => (
+                          <span key={ev} className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${ev === 'Slalom' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-muted text-muted-foreground'}`}>
+                            {ev[0]}
+                          </span>
+                        ))}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {imported > 0 && (
+                <div className="flex items-center gap-2 p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-emerald-700 font-medium text-sm">
+                  <CheckCircle2 className="w-4 h-4" /> {imported} participants added to tournament roster
+                </div>
+              )}
+
+              <Button
+                variant="primary"
+                onClick={importSelected}
+                isLoading={importing}
+                disabled={selected.size === 0 || importing}
+                className="w-full flex items-center justify-center gap-2"
+              >
+                <Download className="w-4 h-4" />
+                Import {selected.size} Participant{selected.size !== 1 ? 's' : ''} into Tournament
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
     </Card>
   );
 }

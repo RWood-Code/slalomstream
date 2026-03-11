@@ -1,42 +1,347 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useAppStore } from '@/lib/store';
-import { useGetTournament, useListSkiers, useListPasses, useCreatePass, useUpdatePass } from '@workspace/api-client-react';
+import {
+  useGetTournament, useListSkiers, useListPasses,
+  useListJudges, useCreatePass, useUpdatePass
+} from '@workspace/api-client-react';
 import { Card, Button, Badge, PageHeader, Select, Input } from '@/components/ui/shared';
-import { Play, SquareSquare, Timer, User, Wifi, ChevronDown, ChevronUp } from 'lucide-react';
+import {
+  Play, SquareSquare, Timer, User, Wifi, ChevronDown, ChevronUp,
+  Camera, CameraOff, Circle, Square, Maximize2, RefreshCw,
+  Gauge, MonitorPlay, CheckCircle2
+} from 'lucide-react';
 import { ROPE_LENGTHS, SPEEDS, formatRope, formatSpeed } from '@/lib/utils';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { QRCodeSVG } from 'qrcode.react';
 
-interface NetworkInfo {
-  addresses: { name: string; address: string; family: string }[];
-  port: string;
-  urls: string[];
-}
-
+// ─── Network info ─────────────────────────────────────────────────────────────
+interface NetworkInfo { addresses: { name: string; address: string; family: string }[]; port: string; urls: string[] }
 function useNetworkInfo() {
   return useQuery<NetworkInfo>({
     queryKey: ['network-info'],
-    queryFn: async () => {
-      const res = await fetch('/api/network-info');
-      if (!res.ok) throw new Error('Failed to fetch network info');
-      return res.json();
-    },
+    queryFn: async () => { const r = await fetch('/api/network-info'); return r.json(); },
     refetchInterval: 30000,
     staleTime: 15000,
   });
 }
 
-function JudgeConnectPanel() {
+// ─── Judge score overlay data ──────────────────────────────────────────────────
+function usePassJudgeScores(passId: number | null) {
+  return useQuery<any[]>({
+    queryKey: ['pass-judge-scores', passId],
+    queryFn: async () => {
+      if (!passId) return [];
+      const r = await fetch(`/api/passes/${passId}/judge-scores`);
+      return r.ok ? r.json() : [];
+    },
+    enabled: !!passId,
+    refetchInterval: 2000,
+  });
+}
+
+// ─── Video hook ────────────────────────────────────────────────────────────────
+type VideoMode = 'idle' | 'preview' | 'recording' | 'replay';
+
+function useVideoRecorder() {
+  const [mode, setMode] = useState<VideoMode>('idle');
+  const [replayUrl, setReplayUrl] = useState<string | null>(null);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [error, setError] = useState<string | null>(null);
+  const [pipActive, setPipActive] = useState(false);
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+
+  const startCamera = useCallback(async () => {
+    setError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } },
+        audio: false,
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.muted = true;
+        videoRef.current.play().catch(() => {});
+      }
+      setMode('preview');
+    } catch (err: any) {
+      setError(err.message || 'Camera access denied');
+    }
+  }, []);
+
+  const stopCamera = useCallback(() => {
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setMode('idle');
+  }, []);
+
+  const startRecording = useCallback(() => {
+    if (!streamRef.current || mode === 'recording') return;
+    if (replayUrl) URL.revokeObjectURL(replayUrl);
+    setReplayUrl(null);
+    chunksRef.current = [];
+
+    const mimeType =
+      MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' :
+      MediaRecorder.isTypeSupported('video/webm;codecs=vp8') ? 'video/webm;codecs=vp8' :
+      'video/webm';
+
+    try {
+      const recorder = new MediaRecorder(streamRef.current, { mimeType });
+      recorder.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      recorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        setReplayUrl(url);
+        setPlaybackRate(1);
+        // Switch video to replay
+        if (videoRef.current) {
+          videoRef.current.srcObject = null;
+          videoRef.current.src = url;
+          videoRef.current.muted = false;
+          videoRef.current.loop = false;
+          videoRef.current.playbackRate = 1;
+          videoRef.current.play().catch(() => {});
+        }
+        setMode('replay');
+      };
+      recorder.start(100);
+      recorderRef.current = recorder;
+      setMode('recording');
+    } catch (err: any) {
+      setError(`Recording not supported: ${err.message}`);
+    }
+  }, [mode, replayUrl]);
+
+  const stopRecording = useCallback(() => {
+    recorderRef.current?.stop();
+    recorderRef.current = null;
+  }, []);
+
+  const backToPreview = useCallback(() => {
+    if (videoRef.current) {
+      videoRef.current.src = '';
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.muted = true;
+      videoRef.current.loop = false;
+      videoRef.current.play().catch(() => {});
+    }
+    setMode(streamRef.current ? 'preview' : 'idle');
+  }, []);
+
+  const setSpeed = useCallback((rate: number) => {
+    setPlaybackRate(rate);
+    if (videoRef.current) videoRef.current.playbackRate = rate;
+  }, []);
+
+  const togglePiP = useCallback(async () => {
+    if (!videoRef.current) return;
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+        setPipActive(false);
+      } else {
+        await videoRef.current.requestPictureInPicture();
+        setPipActive(true);
+      }
+    } catch (err: any) {
+      setError(`Picture-in-Picture not supported: ${err.message}`);
+    }
+  }, []);
+
+  // PiP lifecycle
+  useEffect(() => {
+    const vid = videoRef.current;
+    if (!vid) return;
+    const onEnter = () => setPipActive(true);
+    const onLeave = () => setPipActive(false);
+    vid.addEventListener('enterpictureinpicture', onEnter);
+    vid.addEventListener('leavepictureinpicture', onLeave);
+    return () => {
+      vid.removeEventListener('enterpictureinpicture', onEnter);
+      vid.removeEventListener('leavepictureinpicture', onLeave);
+    };
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      if (replayUrl) URL.revokeObjectURL(replayUrl);
+    };
+  }, []);
+
+  return {
+    videoRef, mode, replayUrl, playbackRate, error, pipActive,
+    startCamera, stopCamera, startRecording, stopRecording, backToPreview,
+    setSpeed, togglePiP,
+  };
+}
+
+// ─── Video Panel ───────────────────────────────────────────────────────────────
+interface VideoPanelProps {
+  video: ReturnType<typeof useVideoRecorder>;
+  activePassId: number | null;
+  activePassName: string | null;
+}
+
+function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
+  const { data: scores } = usePassJudgeScores(activePassId);
+  const { mode, videoRef, error, pipActive, playbackRate } = video;
+
+  const ROLE_SHORT: Record<string, string> = {
+    judge_a: 'A', judge_b: 'B', judge_c: 'C',
+    judge_d: 'D', judge_e: 'E', boat_judge: 'Boat', chief_judge: 'CJ',
+  };
+
+  return (
+    <div className="rounded-2xl overflow-hidden bg-black border shadow-2xl relative">
+      {/* Video element — always mounted */}
+      <video
+        ref={videoRef}
+        className="w-full aspect-video object-cover"
+        playsInline
+        autoPlay
+        muted
+        style={{ display: mode === 'idle' ? 'none' : 'block' }}
+      />
+
+      {/* Idle state */}
+      {mode === 'idle' && (
+        <div className="w-full aspect-video flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 gap-4">
+          <Camera className="w-14 h-14 text-slate-500" />
+          <p className="text-slate-400 text-sm font-medium">Camera offline</p>
+          <Button
+            variant="primary"
+            onClick={video.startCamera}
+            className="flex items-center gap-2"
+          >
+            <Camera className="w-4 h-4" /> Enable Camera
+          </Button>
+          {error && <p className="text-red-400 text-xs text-center px-4">{error}</p>}
+        </div>
+      )}
+
+      {/* Overlays when camera/replay active */}
+      {mode !== 'idle' && (
+        <>
+          {/* Status badge — top left */}
+          <div className="absolute top-3 left-3 flex items-center gap-2">
+            {mode === 'recording' && (
+              <span className="flex items-center gap-1.5 bg-red-600/90 backdrop-blur text-white text-xs font-bold px-2.5 py-1 rounded-full shadow">
+                <Circle className="w-2.5 h-2.5 fill-white animate-pulse" /> REC
+              </span>
+            )}
+            {mode === 'preview' && (
+              <span className="flex items-center gap-1.5 bg-black/60 backdrop-blur text-white text-xs font-semibold px-2.5 py-1 rounded-full">
+                LIVE
+              </span>
+            )}
+            {mode === 'replay' && (
+              <span className="flex items-center gap-1.5 bg-blue-600/90 backdrop-blur text-white text-xs font-bold px-2.5 py-1 rounded-full">
+                <MonitorPlay className="w-3 h-3" /> REPLAY
+                {playbackRate !== 1 && ` · ${playbackRate}×`}
+              </span>
+            )}
+          </div>
+
+          {/* Skier name — top right (during recording) */}
+          {(mode === 'recording' || mode === 'replay') && activePassName && (
+            <div className="absolute top-3 right-3 bg-black/70 backdrop-blur text-white text-xs font-bold px-3 py-1 rounded-full">
+              {activePassName}
+            </div>
+          )}
+
+          {/* Judge score overlay — bottom left */}
+          {scores && scores.length > 0 && (
+            <div className="absolute bottom-12 left-3 flex flex-col gap-1">
+              {scores.map((s: any) => (
+                <div key={s.id} className="flex items-center gap-2 bg-black/75 backdrop-blur text-white text-sm font-bold px-2.5 py-1 rounded-lg">
+                  <span className="text-emerald-400 text-xs font-semibold w-5">{ROLE_SHORT[s.judge_role] ?? 'J'}</span>
+                  <span>{s.pass_score}</span>
+                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Controls bar — bottom */}
+          <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/80 to-transparent px-3 py-2 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              {(mode === 'preview' || mode === 'recording') && (
+                <button
+                  onClick={video.stopCamera}
+                  className="text-white/70 hover:text-white transition-colors p-1"
+                  title="Stop camera"
+                >
+                  <CameraOff className="w-4 h-4" />
+                </button>
+              )}
+              {mode === 'replay' && (
+                <>
+                  <button onClick={video.backToPreview} className="text-white/70 hover:text-white p-1" title="Back to live">
+                    <Camera className="w-4 h-4" />
+                  </button>
+                  <div className="flex items-center gap-1 bg-white/10 rounded-lg px-2 py-1">
+                    <Gauge className="w-3.5 h-3.5 text-white/60" />
+                    {[0.25, 0.5, 1].map(r => (
+                      <button
+                        key={r}
+                        onClick={() => video.setSpeed(r)}
+                        className={`text-xs font-bold px-1.5 py-0.5 rounded transition-colors ${playbackRate === r ? 'text-emerald-400' : 'text-white/60 hover:text-white'}`}
+                      >
+                        {r === 1 ? '1×' : `${r}×`}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {/* PiP */}
+              {'pictureInPictureEnabled' in document && (
+                <button
+                  onClick={video.togglePiP}
+                  className={`p-1.5 rounded-lg transition-colors ${pipActive ? 'text-emerald-400 bg-emerald-400/20' : 'text-white/70 hover:text-white'}`}
+                  title="Picture-in-Picture"
+                >
+                  <Maximize2 className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Per-judge QR Connect Panel ────────────────────────────────────────────────
+function JudgeConnectPanel({ tournamentId }: { tournamentId: number }) {
   const [open, setOpen] = useState(false);
   const { data: network } = useNetworkInfo();
-  const currentUrl = window.location.origin;
-  const judgeUrl = `${currentUrl}/judging`;
+  const { data: judges } = useListJudges(tournamentId);
 
-  const localUrls = network?.urls?.map(u => u.replace(/:\d+$/, '') + window.location.port ? `:${window.location.port}` : '') || [];
-  const displayUrl = network?.urls?.[0]
-    ? `http://${network.urls[0].split('//')[1].split(':')[0]}:${window.location.port || network.port}/judging`
-    : judgeUrl;
+  const getJudgeUrl = (judgeId: number) => {
+    const base = network?.urls?.[0]
+      ? `http://${network.urls[0].split('//')[1]?.split(':')[0]}:${window.location.port || network.port}`
+      : window.location.origin;
+    return `${base}/judging?j=${judgeId}`;
+  };
+
+  const ROLE_LABELS: Record<string, string> = {
+    judge_a: 'Judge A', judge_b: 'Judge B', judge_c: 'Judge C',
+    judge_d: 'Judge D', judge_e: 'Judge E',
+    boat_judge: 'Boat Judge', chief_judge: 'Chief Judge',
+  };
 
   return (
     <Card className="overflow-hidden border-primary/20">
@@ -50,7 +355,11 @@ function JudgeConnectPanel() {
           </div>
           <div className="text-left">
             <p className="font-bold text-sm">Judge Connect</p>
-            <p className="text-[11px] text-muted-foreground">Scan QR code to connect judge devices</p>
+            <p className="text-[11px] text-muted-foreground">
+              {judges?.length
+                ? `${judges.length} judge QR code${judges.length !== 1 ? 's' : ''} — each judge scans their own`
+                : 'Configure judges in Admin first'}
+            </p>
           </div>
         </div>
         {open ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
@@ -58,71 +367,107 @@ function JudgeConnectPanel() {
 
       {open && (
         <div className="border-t p-5 space-y-4">
-          <div className="flex flex-col sm:flex-row gap-6 items-start">
-            <div className="flex-shrink-0 p-3 bg-white rounded-2xl shadow-sm border">
-              <QRCodeSVG
-                value={displayUrl}
-                size={160}
-                level="M"
-                fgColor="#064e3b"
-                bgColor="#ffffff"
-              />
-            </div>
-            <div className="space-y-3 flex-1">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">Judge URL</p>
-                <p className="font-mono text-sm bg-muted px-3 py-2 rounded-lg break-all">{displayUrl}</p>
+          {!judges || judges.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-4">
+              No judges configured. Add judges in the Admin panel first.
+            </p>
+          ) : (
+            <>
+              <p className="text-xs text-muted-foreground">
+                Each judge scans <strong>their own QR code</strong>. They are taken directly to their login screen and only need to enter their PIN — no name selection needed.
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                {judges.map(judge => {
+                  const url = getJudgeUrl(judge.id);
+                  return (
+                    <div key={judge.id} className="flex flex-col items-center gap-2 p-3 rounded-xl border bg-card hover:border-primary/40 transition-colors">
+                      <div className="p-2 bg-white rounded-xl border shadow-sm">
+                        <QRCodeSVG
+                          value={url}
+                          size={110}
+                          level="M"
+                          fgColor="#064e3b"
+                          bgColor="#ffffff"
+                        />
+                      </div>
+                      <div className="text-center">
+                        <p className="font-bold text-sm leading-tight">{ROLE_LABELS[judge.judge_role] ?? judge.judge_role}</p>
+                        <p className="text-[11px] text-muted-foreground truncate max-w-[120px]">{judge.name}</p>
+                        {judge.pin ? (
+                          <span className="text-[10px] text-emerald-600 font-semibold">PIN set ✓</span>
+                        ) : (
+                          <span className="text-[10px] text-amber-600 font-semibold">No PIN</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              {network?.urls && network.urls.length > 0 && (
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">Local Network Addresses</p>
-                  <div className="space-y-1">
-                    {network.urls.map((url, i) => {
-                      const judgeLocal = url.replace(/:\d+$/, `:${window.location.port || network.port}`) + '/judging';
-                      return (
-                        <p key={i} className="font-mono text-xs bg-emerald-50 text-emerald-800 px-3 py-1.5 rounded-lg">
-                          {judgeLocal}
-                        </p>
-                      );
-                    })}
-                  </div>
-                </div>
+              {network?.urls?.[0] && (
+                <p className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3">
+                  Connect judge devices to the same WiFi network. Judges scan their personal QR code and enter only their PIN.
+                </p>
               )}
-              <div className="pt-1 space-y-1 text-xs text-muted-foreground">
-                <p>1. Connect judge devices to the same WiFi network as this computer.</p>
-                <p>2. Scan the QR code or type the URL into any browser.</p>
-                <p>3. Judges select their name and enter their PIN to log in.</p>
-              </div>
-            </div>
-          </div>
+            </>
+          )}
         </div>
       )}
     </Card>
   );
 }
 
+// ─── Main Recording Page ───────────────────────────────────────────────────────
 export default function Recording() {
   const { activeTournamentId } = useAppStore();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  
+
   const { data: tournament } = useGetTournament(activeTournamentId || 0, { query: { enabled: !!activeTournamentId } });
   const { data: skiers } = useListSkiers(activeTournamentId || 0, { query: { enabled: !!activeTournamentId } });
-  const { data: passes } = useListPasses(activeTournamentId || 0, { query: { enabled: !!activeTournamentId }, request: { refetchInterval: 5000 } as any });
+  const { data: passes } = useListPasses(activeTournamentId || 0, {
+    query: { enabled: !!activeTournamentId },
+    request: { refetchInterval: 3000 } as any,
+  });
 
   const activePass = passes?.find(p => p.status === 'pending');
-  const recentPasses = passes?.filter(p => p.status !== 'pending').sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 5) || [];
+  const recentPasses = passes
+    ?.filter(p => p.status !== 'pending')
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, 8) || [];
 
-  const [skierId, setSkierId] = useState<string>('');
-  const [rope, setRope] = useState<string>('18.25');
-  const [speed, setSpeed] = useState<string>('55');
-  const [round, setRound] = useState<string>('1');
+  const [skierId, setSkierId] = useState('');
+  const [rope, setRope] = useState('18.25');
+  const [speed, setSpeed] = useState('55');
+  const [round, setRound] = useState('1');
+
+  const video = useVideoRecorder();
+  const prevActivePassId = useRef<number | null>(null);
+
+  // Auto-start recording when pass starts, auto-stop when it ends
+  useEffect(() => {
+    const curr = activePass?.id ?? null;
+    const prev = prevActivePassId.current;
+
+    if (curr && !prev) {
+      // Pass just started — begin recording if camera active
+      if (video.mode === 'preview') {
+        video.startRecording();
+        toast({ title: "Recording started", description: activePass?.skier_name });
+      }
+    } else if (!curr && prev) {
+      // Pass just ended — stop recording → auto-replay
+      if (video.mode === 'recording') {
+        video.stopRecording();
+      }
+    }
+    prevActivePassId.current = curr;
+  }, [activePass?.id]);
 
   const createMutation = useCreatePass({
     mutation: {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: ['/api/tournaments', activeTournamentId, 'passes'] });
-        toast({ title: "Pass started", description: "Waiting for judge scores." });
+        toast({ title: "Pass started" });
       }
     }
   });
@@ -131,20 +476,19 @@ export default function Recording() {
     mutation: {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: ['/api/tournaments', activeTournamentId, 'passes'] });
-        toast({ title: "Pass marked as complete" });
+        toast({ title: "Pass ended — scores collated" });
       }
     }
   });
 
   if (!activeTournamentId) {
-    return <div className="p-8 text-center"><p className="text-xl text-muted-foreground">Please select a tournament from the Home page first.</p></div>;
+    return <div className="p-8 text-center"><p className="text-xl text-muted-foreground">Select a tournament from Home first.</p></div>;
   }
 
   const handleStartPass = () => {
     if (!skierId) return toast({ title: "Select a skier", variant: "destructive" });
     const skier = skiers?.find(s => s.id.toString() === skierId);
     if (!skier) return;
-
     createMutation.mutate({
       id: activeTournamentId,
       data: {
@@ -160,17 +504,14 @@ export default function Recording() {
 
   const handleEndPass = () => {
     if (!activePass) return;
-    updateMutation.mutate({
-      id: activePass.id,
-      data: { status: 'scored' }
-    });
+    updateMutation.mutate({ id: activePass.id, data: { status: 'scored' } });
   };
 
   return (
-    <div className="space-y-6">
-      <PageHeader 
-        title="Pass Recording" 
-        subtitle="Operator Control Panel" 
+    <div className="space-y-5">
+      <PageHeader
+        title="Pass Recording"
+        subtitle="Operator Control Panel"
         actions={
           <Badge variant={activePass ? "success" : "outline"} className={activePass ? "animate-pulse" : ""}>
             {activePass ? "● SKIER ON WATER" : "STANDBY"}
@@ -178,123 +519,200 @@ export default function Recording() {
         }
       />
 
-      <JudgeConnectPanel />
+      <div className="grid xl:grid-cols-5 gap-5">
+        {/* ── Left column: Video + Judge Connect ── */}
+        <div className="xl:col-span-3 space-y-4">
+          <VideoPanel
+            video={video}
+            activePassId={activePass?.id ?? null}
+            activePassName={activePass?.skier_name ?? null}
+          />
 
-      <div className="grid lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 space-y-6">
-          <Card className="p-6 md:p-8 bg-gradient-to-br from-card to-emerald-50 dark:to-emerald-950/20 shadow-xl border-primary/20">
-            <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
-              <Timer className="text-primary" /> 
-              {activePass ? "Active Pass Control" : "Setup Next Pass"}
+          {/* Video action bar */}
+          {video.mode !== 'idle' && (
+            <div className="flex items-center gap-2 flex-wrap">
+              {video.mode === 'preview' && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={video.startRecording}
+                  disabled={!activePass}
+                  title={!activePass ? "Start a pass first to record" : "Start recording manually"}
+                  className="flex items-center gap-2"
+                >
+                  <Circle className="w-3.5 h-3.5 fill-current" /> Record
+                </Button>
+              )}
+              {video.mode === 'recording' && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={video.stopRecording}
+                  className="flex items-center gap-2"
+                >
+                  <Square className="w-3.5 h-3.5 fill-current" /> Stop Recording
+                </Button>
+              )}
+              {video.mode === 'replay' && (
+                <>
+                  <Button variant="outline" size="sm" onClick={video.backToPreview} className="flex items-center gap-2">
+                    <Camera className="w-3.5 h-3.5" /> Back to Live
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => { if (video.videoRef.current) { video.videoRef.current.currentTime = 0; video.videoRef.current.play(); } }}>
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </Button>
+                </>
+              )}
+              <span className="text-xs text-muted-foreground ml-1">
+                {video.mode === 'preview' && 'Camera live — recording starts automatically when pass begins'}
+                {video.mode === 'recording' && 'Recording… will stop and replay automatically when pass ends'}
+                {video.mode === 'replay' && 'Instant replay — use speed controls or Picture-in-Picture'}
+              </span>
+            </div>
+          )}
+
+          <JudgeConnectPanel tournamentId={activeTournamentId} />
+        </div>
+
+        {/* ── Right column: Pass control + recent passes ── */}
+        <div className="xl:col-span-2 space-y-5">
+          {/* Pass control card */}
+          <Card className="p-5 bg-gradient-to-br from-card to-emerald-50 dark:to-emerald-950/20 shadow-xl border-primary/20">
+            <h2 className="text-xl font-bold mb-5 flex items-center gap-2">
+              <Timer className="text-primary w-5 h-5" />
+              {activePass ? "Active Pass" : "Setup Next Pass"}
             </h2>
-            
+
             {activePass ? (
-              <div className="space-y-6">
-                <div className="p-6 bg-primary/10 rounded-2xl border border-primary/20">
-                  <div className="text-center space-y-2">
-                    <p className="text-sm font-bold text-primary uppercase tracking-widest">Currently on water</p>
-                    <p className="text-4xl font-display font-bold">{activePass.skier_name}</p>
-                    <div className="flex items-center justify-center gap-4 text-muted-foreground font-semibold mt-2">
-                      <span>Rnd {activePass.round_number}</span>
-                      <span>•</span>
-                      <span>{formatSpeed(activePass.speed_kph)}</span>
-                      <span>•</span>
-                      <span>{formatRope(activePass.rope_length)}</span>
-                    </div>
-                  </div>
+              <div className="space-y-5">
+                <div className="p-5 bg-primary/10 rounded-2xl border border-primary/20 text-center space-y-2">
+                  <p className="text-xs font-bold text-primary uppercase tracking-widest">On water now</p>
+                  <p className="text-3xl font-display font-bold">{activePass.skier_name}</p>
+                  <p className="text-muted-foreground font-semibold text-sm">
+                    Rnd {activePass.round_number} · {formatSpeed(activePass.speed_kph)} · {formatRope(activePass.rope_length)}
+                  </p>
                 </div>
-                
-                <Button 
-                  variant="destructive" 
-                  size="lg" 
-                  className="w-full h-20 text-xl shadow-red-500/25 shadow-xl hover:shadow-red-500/40"
+                <Button
+                  variant="destructive"
+                  size="lg"
+                  className="w-full h-16 text-lg shadow-red-500/25 shadow-xl"
                   onClick={handleEndPass}
                   isLoading={updateMutation.isPending}
                 >
-                  <SquareSquare className="mr-2 h-6 w-6" /> END PASS / COLLATE SCORES
+                  <SquareSquare className="mr-2 h-5 w-5" /> END PASS / COLLATE
                 </Button>
-                <p className="text-center text-sm text-muted-foreground font-medium">
-                  Wait for all judges to submit before ending pass if automatic collation is needed.
-                </p>
+                <JudgeScoreStatusBar passId={activePass.id} />
               </div>
             ) : (
-              <div className="space-y-6">
-                <Select 
-                  label="Select Skier"
+              <div className="space-y-4">
+                <Select
+                  label="Skier"
                   value={skierId}
-                  onChange={(e) => setSkierId(e.target.value)}
+                  onChange={e => setSkierId(e.target.value)}
                   options={[
                     { label: '-- Select Skier --', value: '' },
-                    ...(skiers?.map(s => ({ 
-                      label: `${s.first_name} ${s.surname} - ${s.division || 'No Div'}`, 
-                      value: s.id 
+                    ...(skiers?.map(s => ({
+                      label: `${s.first_name} ${s.surname} · ${s.division || '—'}`,
+                      value: s.id,
                     })) || [])
                   ]}
                 />
-                
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                  <Select 
-                    label="Rope Length"
+                <div className="grid grid-cols-2 gap-3">
+                  <Select
+                    label="Rope"
                     value={rope}
-                    onChange={(e) => setRope(e.target.value)}
+                    onChange={e => setRope(e.target.value)}
                     options={ROPE_LENGTHS.map(r => ({ label: formatRope(r), value: r }))}
                   />
-                  <Select 
+                  <Select
                     label="Speed"
                     value={speed}
-                    onChange={(e) => setSpeed(e.target.value)}
+                    onChange={e => setSpeed(e.target.value)}
                     options={SPEEDS.map(s => ({ label: formatSpeed(s), value: s }))}
                   />
-                  <Input 
-                    label="Round"
-                    type="number"
-                    min="1"
-                    value={round}
-                    onChange={(e) => setRound(e.target.value)}
-                  />
                 </div>
-                
-                <Button 
-                  variant="primary" 
-                  size="lg" 
-                  className="w-full h-16 text-lg"
+                <Input
+                  label="Round"
+                  type="number"
+                  min="1"
+                  value={round}
+                  onChange={e => setRound(e.target.value)}
+                />
+                <Button
+                  variant="primary"
+                  size="lg"
+                  className="w-full h-14 text-lg"
                   onClick={handleStartPass}
                   isLoading={createMutation.isPending}
                 >
-                  <Play className="mr-2 h-6 w-6 fill-current" /> START PASS
+                  <Play className="mr-2 h-5 w-5 fill-current" /> START PASS
                 </Button>
               </div>
             )}
           </Card>
-        </div>
 
-        <div className="space-y-4">
-          <h3 className="font-bold text-lg px-1 flex items-center gap-2">
-            <User className="w-5 h-5 text-muted-foreground" /> Recent Passes
-          </h3>
-          {recentPasses.length === 0 ? (
-            <Card className="p-8 text-center text-muted-foreground border-dashed">
-              No recent passes in this tournament.
-            </Card>
-          ) : (
-            recentPasses.map(pass => (
-              <Card key={pass.id} className="p-4 hover:border-primary/50 transition-colors">
-                <div className="flex justify-between items-start mb-2">
-                  <div>
-                    <p className="font-bold text-sm leading-tight">{pass.skier_name}</p>
-                    <p className="text-[11px] text-muted-foreground uppercase font-semibold mt-0.5">
-                      R{pass.round_number} • {pass.speed_kph}kph • {pass.rope_length}m
-                    </p>
-                  </div>
-                  <div className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200 px-3 py-1 rounded-lg text-center min-w-[3rem]">
-                    <p className="text-[10px] uppercase font-bold opacity-80">Score</p>
-                    <p className="font-display font-black text-lg leading-none">{pass.buoys_scored ?? '-'}</p>
-                  </div>
-                </div>
-              </Card>
-            ))
-          )}
+          {/* Recent passes */}
+          <div>
+            <h3 className="font-bold text-base px-1 mb-3 flex items-center gap-2">
+              <User className="w-4 h-4 text-muted-foreground" /> Recent Passes
+            </h3>
+            {recentPasses.length === 0 ? (
+              <Card className="p-6 text-center text-muted-foreground border-dashed text-sm">No passes yet.</Card>
+            ) : (
+              <div className="space-y-2">
+                {recentPasses.map(pass => (
+                  <Card key={pass.id} className="p-3 hover:border-primary/50 transition-colors flex justify-between items-center">
+                    <div>
+                      <p className="font-bold text-sm">{pass.skier_name}</p>
+                      <p className="text-[11px] text-muted-foreground font-semibold">
+                        R{pass.round_number} · {pass.speed_kph}kph · {pass.rope_length}m
+                      </p>
+                    </div>
+                    <div className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200 px-3 py-1 rounded-lg text-center min-w-[3rem]">
+                      <p className="text-[10px] uppercase font-bold opacity-70">Score</p>
+                      <p className="font-display font-black text-lg leading-none">{pass.buoys_scored ?? '—'}</p>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Judge score status bar (during active pass) ───────────────────────────────
+function JudgeScoreStatusBar({ passId }: { passId: number }) {
+  const { data: scores } = usePassJudgeScores(passId);
+
+  if (!scores || scores.length === 0) {
+    return (
+      <p className="text-center text-xs text-muted-foreground animate-pulse">
+        Waiting for judge scores…
+      </p>
+    );
+  }
+
+  const ROLE_SHORT: Record<string, string> = {
+    judge_a: 'A', judge_b: 'B', judge_c: 'C',
+    judge_d: 'D', judge_e: 'E', boat_judge: 'Boat', chief_judge: 'CJ',
+  };
+
+  return (
+    <div className="bg-muted/50 rounded-xl p-3">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">
+        Scores received ({scores.length})
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {scores.map((s: any) => (
+          <div key={s.id} className="flex items-center gap-1.5 bg-card border rounded-lg px-2.5 py-1">
+            <span className="text-[10px] font-bold text-muted-foreground">{ROLE_SHORT[s.judge_role] ?? 'J'}</span>
+            <span className="font-display font-bold text-sm text-emerald-700">{s.pass_score}</span>
+            <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+          </div>
+        ))}
       </div>
     </div>
   );
