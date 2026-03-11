@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useAppStore } from '@/lib/store';
 import {
   useGetTournament, useListSkiers, useListPasses,
-  useListJudges, useCreatePass, useUpdatePass
+  useCreatePass, useUpdatePass
 } from '@workspace/api-client-react';
 import { Card, Button, Badge, PageHeader, Select, Input } from '@/components/ui/shared';
 import {
@@ -354,24 +354,34 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
   );
 }
 
-// ─── Per-judge QR Connect Panel ────────────────────────────────────────────────
-function JudgeConnectPanel({ tournamentId }: { tournamentId: number }) {
+// ─── Static Role QR Connect Panel ──────────────────────────────────────────────
+// QR codes encode the JUDGING POSITION (role), not the person.
+// Any official with a valid PIN can scan any station QR and log in as that role.
+// These QR codes are static — print once, use forever.
+const JUDGING_STATIONS = [
+  { role: 'judge_a',     label: 'Judge A',     short: 'A' },
+  { role: 'judge_b',     label: 'Judge B',     short: 'B' },
+  { role: 'judge_c',     label: 'Judge C',     short: 'C' },
+  { role: 'judge_d',     label: 'Judge D',     short: 'D' },
+  { role: 'judge_e',     label: 'Judge E',     short: 'E' },
+  { role: 'boat_judge',  label: 'Boat Judge',  short: 'BJ' },
+  { role: 'chief_judge', label: 'Chief Judge', short: 'CJ' },
+];
+
+function JudgeConnectPanel({ tournamentId: _tournamentId }: { tournamentId: number }) {
   const [open, setOpen] = useState(false);
   const { data: network } = useNetworkInfo();
-  const { data: judges } = useListJudges(tournamentId);
 
-  const getJudgeUrl = (judgeId: number) => {
-    const base = network?.urls?.[0]
-      ? `http://${network.urls[0].split('//')[1]?.split(':')[0]}:${window.location.port || network.port}`
-      : window.location.origin;
-    return `${base}/judging?j=${judgeId}`;
+  const getBase = () => {
+    if (network?.urls?.[0]) {
+      const host = network.urls[0].split('//')[1]?.split(':')[0];
+      const port = window.location.port || network.port;
+      return `http://${host}:${port}`;
+    }
+    return window.location.origin;
   };
 
-  const ROLE_LABELS: Record<string, string> = {
-    judge_a: 'Judge A', judge_b: 'Judge B', judge_c: 'Judge C',
-    judge_d: 'Judge D', judge_e: 'Judge E',
-    boat_judge: 'Boat Judge', chief_judge: 'Chief Judge',
-  };
+  const getRoleUrl = (role: string) => `${getBase()}/judging?role=${role}`;
 
   return (
     <Card className="overflow-hidden border-primary/20">
@@ -384,11 +394,9 @@ function JudgeConnectPanel({ tournamentId }: { tournamentId: number }) {
             <Wifi className="w-4 h-4 text-primary" />
           </div>
           <div className="text-left">
-            <p className="font-bold text-sm">Judge Connect</p>
+            <p className="font-bold text-sm">Judge Station QR Codes</p>
             <p className="text-[11px] text-muted-foreground">
-              {judges?.length
-                ? `${judges.length} judge QR code${judges.length !== 1 ? 's' : ''} — each judge scans their own`
-                : 'Configure judges in Admin first'}
+              Static — one per judging position. Any official scans, enters their PIN.
             </p>
           </div>
         </div>
@@ -397,48 +405,38 @@ function JudgeConnectPanel({ tournamentId }: { tournamentId: number }) {
 
       {open && (
         <div className="border-t p-5 space-y-4">
-          {!judges || judges.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-4">
-              No judges configured. Add judges in the Admin panel first.
+          <p className="text-xs text-muted-foreground">
+            Place each QR code at the matching judging station. Any official or judge with a valid PIN scans the QR for
+            their <strong>position</strong> and enters their PIN — the system identifies them automatically.
+            These codes never change between tournaments.
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+            {JUDGING_STATIONS.map(station => {
+              const url = getRoleUrl(station.role);
+              return (
+                <div key={station.role} className="flex flex-col items-center gap-2 p-3 rounded-xl border bg-card hover:border-primary/40 transition-colors">
+                  <div className="p-2 bg-white rounded-xl border shadow-sm">
+                    <QRCodeSVG
+                      value={url}
+                      size={110}
+                      level="M"
+                      fgColor="#064e3b"
+                      bgColor="#ffffff"
+                    />
+                  </div>
+                  <div className="text-center">
+                    <p className="font-bold text-sm leading-tight">{station.label}</p>
+                    <p className="text-[10px] text-muted-foreground font-mono mt-0.5 break-all">/judging?role={station.role}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {network?.urls?.[0] && (
+            <p className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3">
+              <strong>Setup:</strong> Connect all judge devices to the same WiFi network as this computer ({network.urls[0]}).
+              Judges scan their station QR and enter their personal PIN. No configuration needed per tournament.
             </p>
-          ) : (
-            <>
-              <p className="text-xs text-muted-foreground">
-                Each judge scans <strong>their own QR code</strong>. They are taken directly to their login screen and only need to enter their PIN — no name selection needed.
-              </p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                {judges.map(judge => {
-                  const url = getJudgeUrl(judge.id);
-                  return (
-                    <div key={judge.id} className="flex flex-col items-center gap-2 p-3 rounded-xl border bg-card hover:border-primary/40 transition-colors">
-                      <div className="p-2 bg-white rounded-xl border shadow-sm">
-                        <QRCodeSVG
-                          value={url}
-                          size={110}
-                          level="M"
-                          fgColor="#064e3b"
-                          bgColor="#ffffff"
-                        />
-                      </div>
-                      <div className="text-center">
-                        <p className="font-bold text-sm leading-tight">{ROLE_LABELS[judge.judge_role] ?? judge.judge_role}</p>
-                        <p className="text-[11px] text-muted-foreground truncate max-w-[120px]">{judge.name}</p>
-                        {judge.pin ? (
-                          <span className="text-[10px] text-emerald-600 font-semibold">PIN set ✓</span>
-                        ) : (
-                          <span className="text-[10px] text-amber-600 font-semibold">No PIN</span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-              {network?.urls?.[0] && (
-                <p className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3">
-                  Connect judge devices to the same WiFi network. Judges scan their personal QR code and enter only their PIN.
-                </p>
-              )}
-            </>
           )}
         </div>
       )}
