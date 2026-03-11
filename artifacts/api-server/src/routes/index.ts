@@ -7,11 +7,13 @@ import { judgeScorePassRouter, judgeScoreTournamentRouter } from "./judge_scores
 import judgesTournamentRouter, { judgeRouter } from "./judges";
 import settingsRouter, { adminRouter } from "./settings";
 import networkRouter from "./network";
+import waterskiconnectRouter from "./waterskiconnect";
 
 const router = Router();
 
 router.use(healthRouter);
 router.use("/network-info", networkRouter);
+router.use("/waterskiconnect", waterskiconnectRouter);
 router.use("/tournaments", tournamentRouter);
 router.use("/tournaments/:id/skiers", skiersTournamentRouter);
 router.use("/skiers", skierRouter);

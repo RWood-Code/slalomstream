@@ -18,13 +18,15 @@ router.get("/", async (_req, res) => {
 });
 
 router.put("/", async (req, res) => {
-  const { admin_pin, waterskiconnect_enabled, active_tournament_id } = req.body;
+  const { admin_pin, waterskiconnect_enabled, waterskiconnect_url, waterskiconnect_token, active_tournament_id } = req.body;
   await getOrCreateSettings();
   const [updated] = await db
     .update(appSettingsTable)
     .set({
       admin_pin: admin_pin ?? null,
       waterskiconnect_enabled: waterskiconnect_enabled ?? false,
+      waterskiconnect_url: waterskiconnect_url ?? null,
+      waterskiconnect_token: waterskiconnect_token ?? null,
       active_tournament_id: active_tournament_id ?? null,
     })
     .where(eq(appSettingsTable.id, 1))
