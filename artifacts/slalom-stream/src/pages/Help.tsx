@@ -2,10 +2,10 @@ import React, { useState } from 'react';
 import { Card, PageHeader, Badge } from '@/components/ui/shared';
 import {
   BookOpen, Wifi, Server, Smartphone, Users, Zap, Download,
-  ChevronDown, ChevronUp, Radio, Shield, HelpCircle
+  ChevronDown, ChevronUp, Radio, Shield, HelpCircle, Globe, GitBranch
 } from 'lucide-react';
 
-const VERSION = '1.0.0';
+const VERSION = '1.2.0';
 const RELEASE_DATE = 'March 2026';
 
 interface SectionProps {
@@ -53,6 +53,58 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
   return <pre className="bg-muted text-foreground rounded-lg p-4 text-[11px] font-mono overflow-x-auto whitespace-pre">{children}</pre>;
 }
 
+interface ReleaseEntry {
+  version: string;
+  date: string;
+  current?: boolean;
+  items: string[];
+}
+
+const RELEASES: ReleaseEntry[] = [
+  {
+    version: '1.2.0',
+    date: 'March 2026',
+    current: true,
+    items: [
+      'Connection Mode — toggle between Local WiFi and Cloud/Online in Admin; QR codes on the Recording page automatically use the correct address for each mode',
+      'Cloud mode: judges connect via any network (mobile data, any WiFi) when the app is deployed online — no shared network required',
+      'Admin sections are now all collapsible — click any section header to expand or collapse it for easier navigation',
+      'Officials register auto-seeds on first boot — any fresh install or deployed instance automatically populates the full NZTWSA register',
+      'Schema self-heal on startup — new database columns are added automatically so upgrades never break a running installation',
+    ],
+  },
+  {
+    version: '1.1.0',
+    date: 'March 2026',
+    items: [
+      'Chief Judge redesigned — dedicated real-time panel showing all judge scores with inline correction via PATCH; no longer uses a scoring pad',
+      'Judge panel logic rebuilt — panel configuration is driven entirely by the tournament\'s judge_count (1, 3, or 5); boat judge is always the last numbered judge',
+      '1-judge (Grade G): Judge A fills all roles (chief, boat, scoring). 3-judge: A·B·C/Boat + Chief. 5-judge: A·B·C·D·E/Boat + Chief',
+      'Collation fixed — only the numbered scoring-panel judges count toward median; chief_judge score is excluded from collation',
+      'Chief judge score correction — selecting a corrected score immediately re-collates the pass result',
+      'Recording QR panel — shows only the relevant stations for the tournament\'s panel size; labels boat judge clearly',
+      'Officials PINs panel — Reveal PINs and Auto-assign buttons visible in header even when section is collapsed',
+    ],
+  },
+  {
+    version: '1.0.0',
+    date: 'March 2026',
+    items: [
+      'Initial release — full IWWF slalom scoring system',
+      'Multi-judge support with PIN-protected logins (Grade G, L, R/E)',
+      'Live scoreboard with automatic IWWF score collation (median)',
+      'PWA installable — works offline after first load',
+      'QR code on Recording page for instant judge device connection',
+      'Single Node.js server for local/venue deployment — no internet required',
+      'WaterskiConnect inbound webhook integration',
+      'SurePath Live integration via WaterskiConnect observer',
+      'IWWF EMS participant import using sanction code',
+      'NZTWSA officials register with PIN and admin management',
+      'Admin panel: roster, judge accounts, integration settings',
+    ],
+  },
+];
+
 export default function Help() {
   return (
     <div className="space-y-6 max-w-3xl">
@@ -64,68 +116,125 @@ export default function Help() {
 
       {/* Release Notes */}
       <Section icon={BookOpen} title="Release Notes" defaultOpen>
-        <div className="space-y-4">
-          <div className="border-l-2 border-primary pl-4 space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="font-bold">v1.0.0</span>
-              <Badge variant="success" className="text-[10px]">Current</Badge>
-              <span className="text-muted-foreground text-xs">{RELEASE_DATE}</span>
+        <div className="space-y-6">
+          {RELEASES.map(release => (
+            <div key={release.version} className="border-l-2 border-primary pl-4 space-y-1.5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-bold">v{release.version}</span>
+                {release.current && <Badge variant="success" className="text-[10px]">Current</Badge>}
+                <span className="text-muted-foreground text-xs">{release.date}</span>
+              </div>
+              <ul className="space-y-1 text-muted-foreground list-disc list-inside">
+                {release.items.map((item, i) => (
+                  <li key={i}>{item}</li>
+                ))}
+              </ul>
             </div>
-            <ul className="space-y-1 text-muted-foreground list-disc list-inside">
-              <li>Initial release — full IWWF slalom scoring system</li>
-              <li>Multi-judge support with PIN-protected logins (Grade G, L, R/E)</li>
-              <li>Live scoreboard with automatic score collation</li>
-              <li>PWA installable — works offline after first load</li>
-              <li>QR code on Recording page for instant judge connection</li>
-              <li>Single Node.js server for local/venue deployment</li>
-              <li>WaterskiConnect inbound webhook integration</li>
-              <li>Admin panel: roster, judge accounts, settings</li>
-            </ul>
-          </div>
+          ))}
+        </div>
+      </Section>
+
+      {/* Local Install */}
+      <Section icon={Download} title="Getting SlalomStream — Local Installation">
+        <p className="text-muted-foreground">
+          SlalomStream is an open-source project — there is no packaged installer download.
+          You run it directly from the source code. Here's how to set it up on a local laptop for venue use.
+        </p>
+
+        <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl text-sm">
+          <p className="font-bold mb-1">Prerequisites</p>
+          <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
+            <li>Node.js 20 or later</li>
+            <li>pnpm package manager (<Code>npm install -g pnpm</Code>)</li>
+            <li>A PostgreSQL database (local install or cloud-hosted)</li>
+          </ul>
+        </div>
+
+        <div className="space-y-3">
+          <Step n={1}>
+            <strong>Get the code</strong> — Fork or clone this project from Replit, or download it as a ZIP from the Replit editor (<em>⋮ menu → Download as ZIP</em>). Extract it to a folder on your laptop.
+          </Step>
+          <Step n={2}>
+            <strong>Install dependencies</strong> from inside the project folder:
+            <CodeBlock>{`pnpm install`}</CodeBlock>
+          </Step>
+          <Step n={3}>
+            <strong>Set your database URL</strong>. Create a <Code>.env</Code> file (or set the environment variable):
+            <CodeBlock>{`DATABASE_URL=postgresql://localhost/slalomstream`}</CodeBlock>
+          </Step>
+          <Step n={4}>
+            <strong>Push the schema</strong> (creates all tables):
+            <CodeBlock>{`pnpm --filter @workspace/db run push`}</CodeBlock>
+            The NZTWSA officials register is seeded automatically when the server first starts — no extra step needed.
+          </Step>
+          <Step n={5}>
+            <strong>Build and start</strong>:
+            <CodeBlock>{`pnpm --filter @workspace/api-server run build\npnpm --filter @workspace/slalom-stream run build\nPORT=3000 node artifacts/api-server/dist/index.js`}</CodeBlock>
+            The server serves both the API and the frontend from a single process. Open <Code>http://localhost:3000</Code> in a browser.
+          </Step>
+          <Step n={6}>
+            On the <strong>Recording page</strong>, expand "Judge Station QR Codes". Judges scan the QR code for their station — all devices must be on the same WiFi network as the laptop (or use Cloud mode if deployed online).
+          </Step>
+        </div>
+
+        <div className="p-3 bg-muted/50 rounded-xl text-xs text-muted-foreground mt-2">
+          <strong>Tip:</strong> For reliable venue WiFi, connect the laptop to a portable hotspot or router and connect all judge phones to that same network. The server prints its local IP on startup.
         </div>
       </Section>
 
       {/* Local / Venue Setup */}
-      <Section icon={Server} title="Local Venue Setup (Offline Mode)">
+      <Section icon={Server} title="Local Venue Setup (Offline / Local WiFi Mode)">
         <p className="text-muted-foreground">
-          Run the entire system locally at the venue with no internet required. One laptop acts as the server; all other devices connect over WiFi.
+          Run the entire system locally at the venue with no internet required. One laptop acts as the server; all other devices connect over the same WiFi network.
         </p>
         <div className="space-y-3 mt-2">
           <Step n={1}>
-            <strong>Prerequisites:</strong> Node.js 20+ and pnpm installed on the server laptop. A PostgreSQL database (local or cloud).
+            In <strong>Admin → Connection Mode</strong>, select <strong>Local WiFi</strong>. The panel shows the server's detected local IP addresses.
           </Step>
           <Step n={2}>
-            Set your database connection string:
-            <CodeBlock>{`export DATABASE_URL=postgresql://localhost/slalomstream`}</CodeBlock>
+            Create a WiFi hotspot on the laptop (or use an existing venue router) and connect all judge devices to it.
           </Step>
           <Step n={3}>
-            Run the startup script (builds everything and starts the server):
-            <CodeBlock>{`chmod +x scripts/start-local.sh\n./scripts/start-local.sh`}</CodeBlock>
-            The script will print the local IP address and port when ready.
-          </Step>
-          <Step n={4}>
-            Create a WiFi hotspot on the laptop (or use existing venue WiFi) and connect all judge devices to it.
-          </Step>
-          <Step n={5}>
-            On the <strong>Recording page</strong>, tap "Judge Connect" to reveal the QR code. Judges scan it on their phones — that's it.
+            On the <strong>Recording page</strong>, expand "Judge Station QR Codes". QR codes point to the local IP — judges scan and log in.
           </Step>
         </div>
+      </Section>
+
+      {/* Cloud / Online Mode */}
+      <Section icon={Globe} title="Cloud / Online Mode">
+        <p className="text-muted-foreground">
+          When the app is deployed to the internet (e.g. via Replit Deployments), judges can connect from any network — mobile data, hotel WiFi, or home broadband. No shared local network is needed.
+        </p>
+        <div className="space-y-3 mt-2">
+          <Step n={1}>
+            Deploy the app using Replit's Deploy button (or any cloud host). You'll receive a public URL.
+          </Step>
+          <Step n={2}>
+            In <strong>Admin → Connection Mode</strong>, select <strong>Cloud / Online</strong> and enter your public URL (e.g. <Code>https://your-app.replit.app</Code>).
+          </Step>
+          <Step n={3}>
+            QR codes on the Recording page now point to the public URL. Judges can scan from anywhere with internet access.
+          </Step>
+        </div>
+        <p className="text-xs text-muted-foreground mt-2 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
+          <strong>Note:</strong> In cloud mode, all devices need a working internet connection. For remote venues with poor mobile coverage, local WiFi mode is more reliable.
+        </p>
       </Section>
 
       {/* Judge Setup */}
       <Section icon={Users} title="Setting Up Judges">
         <div className="space-y-3">
           <Step n={1}>
-            Go to <strong>Admin → Judge Accounts</strong> and create an account for each judge. Assign their role (Judge A, Judge B, Boat Judge, etc.) and set a 4-digit PIN.
+            Go to <strong>Admin → Officials PINs</strong> and use <strong>Auto-assign PINs</strong> to give every NZTWSA official a 4-digit PIN automatically. Or set them manually. Hand out PINs before the tournament.
           </Step>
           <Step n={2}>
-            Each judge opens the app on their phone, taps the <strong>Judge</strong> tab, selects their name, and enters their PIN.
+            Each judge scans their station QR code on the Recording page, then enters their personal PIN. The system identifies them from the officials register.
           </Step>
           <Step n={3}>
-            When the operator starts a pass on the Recording page, the pass automatically appears on all judge devices. Judges tap a buoy count to submit.
+            When the operator starts a pass, it appears on all connected judge devices. Judges tap a buoy count to submit their score.
           </Step>
           <Step n={4}>
-            Scores are automatically collated per IWWF rules (median of all submitted scores) when the operator ends the pass.
+            Scores are automatically collated per IWWF rules (median of submitted scoring-panel scores) when all judges submit or the operator ends the pass manually.
           </Step>
         </div>
 
@@ -133,9 +242,9 @@ export default function Help() {
           <p className="font-bold text-sm">IWWF Judge Panel Sizes</p>
           <div className="grid grid-cols-3 gap-2 text-center">
             {[
-              { label: 'Grade G', judges: '1 judge', roles: 'Judge A only' },
-              { label: 'Grade L', judges: '3 judges', roles: 'A · B · Boat' },
-              { label: 'Grade R/E', judges: '5 judges', roles: 'A · B · Boat · D · E' },
+              { label: 'Grade G', judges: '1 judge', roles: 'Judge A only (also Chief & Boat)' },
+              { label: 'Grade L', judges: '3 judges', roles: 'A · B · C/Boat + Chief' },
+              { label: 'Grade R/E', judges: '5 judges', roles: 'A · B · C · D · E/Boat + Chief' },
             ].map(g => (
               <div key={g.label} className="bg-card rounded-lg p-3 border">
                 <p className="font-bold text-xs text-primary">{g.label}</p>
@@ -144,6 +253,7 @@ export default function Help() {
               </div>
             ))}
           </div>
+          <p className="text-xs text-muted-foreground">The Chief Judge has a dedicated review screen — real-time panel scores, projected collation, and inline score correction.</p>
         </div>
       </Section>
 
@@ -175,15 +285,9 @@ export default function Help() {
         </p>
 
         <div className="space-y-3 mt-2">
-          <Step n={1}>
-            In <strong>Admin → WaterskiConnect</strong>, enable the integration and copy the inbound webhook URL.
-          </Step>
-          <Step n={2}>
-            Configure your boat/scoring software to POST to that URL whenever a new pass begins. Optionally set a shared secret token for security.
-          </Step>
-          <Step n={3}>
-            Ensure there is an <strong>active tournament selected</strong> in SlalomStream (Home page). Incoming passes are created in that tournament.
-          </Step>
+          <Step n={1}>In <strong>Admin → WaterskiConnect</strong>, enable the integration and copy the inbound webhook URL.</Step>
+          <Step n={2}>Configure your boat/scoring software to POST to that URL whenever a new pass begins. Optionally set a shared secret token for security.</Step>
+          <Step n={3}>Ensure there is an <strong>active tournament selected</strong> in SlalomStream (Home page). Incoming passes are created in that tournament.</Step>
         </div>
 
         <div className="mt-4">
@@ -215,11 +319,11 @@ Content-Type: application/json
       {/* Admin PIN */}
       <Section icon={Shield} title="Admin PIN & Security">
         <div className="space-y-2">
-          <p>The Admin area is protected by a master PIN set in <strong>Admin → Settings</strong>.</p>
-          <p>If no PIN is set, the Admin area is open to anyone who navigates to it — secure the PIN before deploying at a venue.</p>
-          <p>Judge PINs are per-judge 4-digit codes set when creating the judge account. They can be changed by deleting and re-creating the judge.</p>
+          <p>The Admin area is protected by a master PIN set in <strong>Admin → Admin PIN</strong>.</p>
+          <p>Officials marked as Admin in the Officials PINs panel can also log into Admin using their judge PIN — useful so designated officials can manage the system without knowing the master PIN.</p>
+          <p>If no PIN is set, the Admin area is open to anyone who navigates to it — set a PIN before deploying at a venue.</p>
           <p className="text-muted-foreground text-xs mt-2">
-            PINs are stored as plain text in the database. This is intentional — the system is designed for a closed local network, not internet-facing deployment.
+            PINs are stored as plain text in the database. This is intentional — the system is designed for a closed local/venue network. If deploying to the internet (cloud mode), set a strong Admin PIN.
           </p>
         </div>
       </Section>
@@ -229,24 +333,32 @@ Content-Type: application/json
         <div className="space-y-4">
           {[
             {
-              q: 'Judge devices cannot connect to the server',
-              a: 'Make sure all devices are on the same WiFi network. The server address must use the laptop\'s local IP (e.g. 192.168.1.5:3000), not "localhost". Use the QR code on the Recording page — it shows the correct address automatically.'
+              q: 'Judge devices cannot connect — Local WiFi mode',
+              a: 'Make sure all devices are on the same WiFi network as the server laptop. Use the QR code on the Recording page — it shows the correct local IP automatically. Do not type "localhost" as it won\'t work from other devices.',
+            },
+            {
+              q: 'Judge devices cannot connect — Cloud mode',
+              a: 'Check that the Public URL in Admin → Connection Mode is correctly set and that the deployed app is running. Each judge device needs an active internet connection.',
+            },
+            {
+              q: 'The Officials page shows no judges after a fresh install',
+              a: 'The NZTWSA officials register is seeded automatically on first server startup. If the list is still empty, try restarting the server once. If still empty, go to Admin → Officials PINs — if officials appear there, the judging page just needs a PIN assigned before they can log in.',
             },
             {
               q: 'The app shows stale/no scores after a pass',
-              a: 'Scores refresh automatically every 3–5 seconds. If a judge submitted after the operator ended the pass, scores can still be viewed in the pass history on the Scoreboard page.'
+              a: 'Scores refresh automatically every 3–5 seconds. If a judge submitted after the operator ended the pass, scores can still be viewed in the pass history on the Scoreboard page.',
             },
             {
               q: 'WaterskiConnect inbound webhook returns 409',
-              a: 'No active tournament is selected. Go to the Home page and select or create a tournament before the boat software starts sending data.'
+              a: 'No active tournament is selected. Go to the Home page and select or create a tournament before the boat software starts sending data.',
             },
             {
               q: 'PWA does not install on iOS',
-              a: 'SlalomStream must be opened in Safari (not Chrome or Firefox) on iOS for the "Add to Home Screen" option to appear.'
+              a: 'SlalomStream must be opened in Safari (not Chrome or Firefox) on iOS for the "Add to Home Screen" option to appear.',
             },
             {
               q: 'Scores are not being collated automatically',
-              a: 'Collation runs when all registered judges for the tournament have submitted. If a judge did not submit, end the pass manually with the "End Pass" button and scores from judges who did submit will be used.'
+              a: 'Collation runs when all registered scoring-panel judges for the tournament have submitted. If a judge did not submit, end the pass manually with the "End Pass" button — scores from judges who did submit will be used.',
             },
           ].map(({ q, a }) => (
             <div key={q} className="p-4 bg-muted/50 rounded-xl border">
@@ -272,7 +384,7 @@ Content-Type: application/json
 
           <p className="font-bold text-sm mt-4">Collation method</p>
           <p className="text-muted-foreground text-sm">
-            Scores are sorted and the median is taken. With an even number of judges the two middle scores are averaged. This matches the IWWF Technical Judges' manual.
+            Scores are sorted and the median is taken. With an even number of judges the two middle scores are averaged. Chief Judge scores are excluded from collation — they are oversight only. This matches the IWWF Technical Judges' manual.
           </p>
         </div>
       </Section>

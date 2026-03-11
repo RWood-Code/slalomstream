@@ -1,5 +1,6 @@
 import app from "./app";
 import { startSurePathClient } from "./services/surepath-client";
+import { runStartupChecks } from "@workspace/db";
 
 const rawPort = process.env["PORT"];
 
@@ -17,5 +18,7 @@ if (Number.isNaN(port) || port <= 0) {
 
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
-  startSurePathClient().catch(err => console.error("[SurePath] Startup error:", err));
+  runStartupChecks().then(() => {
+    startSurePathClient().catch(err => console.error("[SurePath] Startup error:", err));
+  });
 });
