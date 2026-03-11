@@ -3,19 +3,27 @@ import { useListTournaments, useCreateTournament } from '@workspace/api-client-r
 import { useAppStore } from '@/lib/store';
 import { useLocation } from 'wouter';
 import { Card, Button, Badge, PageHeader, Dialog, Input, Select } from '@/components/ui/shared';
-import { Trophy, CalendarPlus, ChevronRight, Activity, Calendar } from 'lucide-react';
+import { Trophy, CalendarPlus, ChevronRight, Activity, Calendar, FlaskConical, Eye, EyeOff } from 'lucide-react';
 import { TOURNAMENT_CLASSES } from '@/lib/utils';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 
 export default function Home() {
   const [, setLocation] = useLocation();
   const { activeTournamentId, setActiveTournamentId } = useAppStore();
   const queryClient = useQueryClient();
-  const { data: tournaments, isLoading } = useListTournaments();
-  
+
+  const [showTest, setShowTest] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
-  const [formData, setFormData] = useState({ name: '', class: 'L', judges: 3, rounds: 2 });
-  
+  const [formData, setFormData] = useState({ name: '', class: 'L', judges: 3, rounds: 2, is_test: false });
+
+  const { data: tournaments, isLoading } = useQuery({
+    queryKey: ['/api/tournaments', showTest],
+    queryFn: async () => {
+      const res = await fetch(`/api/tournaments${showTest ? '?include_test=true' : ''}`);
+      return res.json() as Promise<any[]>;
+    },
+  });
+
   const createMutation = useCreateTournament({
     mutation: {
       onSuccess: (data) => {
@@ -39,16 +47,21 @@ export default function Home() {
         tournament_class: formData.class,
         judge_count: Number(formData.judges),
         num_rounds: Number(formData.rounds),
+        is_test: formData.is_test,
       }
     });
   };
+
+  const liveTournaments = tournaments?.filter(t => !t.is_test) ?? [];
+  const testTournaments = tournaments?.filter(t => t.is_test) ?? [];
+  const displayed = showTest ? tournaments ?? [] : liveTournaments;
 
   return (
     <div className="space-y-8">
       <div className="relative rounded-3xl overflow-hidden bg-emerald-950 p-8 sm:p-12 shadow-2xl">
         <div className="absolute inset-0 opacity-20 bg-[url('https://pixabay.com/get/gd2d9f26171f6a87a6055d16823d510c3e5eb22aec0d05861de45aae444756c1f2f94c6ba5487b5918facb09f8bea72a030293fad69838470eff6836a9667fba3_1280.jpg')] bg-cover bg-center mix-blend-overlay"></div>
         <div className="absolute inset-0 bg-gradient-to-r from-emerald-900/90 to-transparent"></div>
-        
+
         <div className="relative z-10 max-w-2xl">
           <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30 mb-4 px-3 py-1">
             Professional Waterski Scoring
@@ -67,10 +80,32 @@ export default function Home() {
       </div>
 
       <div>
-        <PageHeader 
-          title="Recent Tournaments" 
+        <PageHeader
+          title="Tournaments"
           subtitle="Select a tournament to enter scoring mode or view live results."
+          actions={
+            <button
+              onClick={() => setShowTest(v => !v)}
+              className={`flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
+                showTest
+                  ? 'bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-700'
+                  : 'text-muted-foreground border-border hover:bg-muted'
+              }`}
+            >
+              {showTest ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+              {showTest ? `Test data visible (${testTournaments.length})` : 'Show test data'}
+            </button>
+          }
         />
+
+        {showTest && testTournaments.length > 0 && (
+          <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2 text-amber-800 dark:bg-amber-900/20 dark:border-amber-700 dark:text-amber-300">
+            <FlaskConical className="w-4 h-4 shrink-0" />
+            <span className="text-sm font-medium">
+              Test tournaments are visible. They are hidden from live scoring and the scoreboard when this toggle is off.
+            </span>
+          </div>
+        )}
 
         {isLoading ? (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -78,7 +113,7 @@ export default function Home() {
               <div key={i} className="h-48 bg-muted animate-pulse rounded-2xl"></div>
             ))}
           </div>
-        ) : !tournaments || tournaments.length === 0 ? (
+        ) : !displayed || displayed.length === 0 ? (
           <Card className="p-12 text-center flex flex-col items-center justify-center border-dashed border-2">
             <Trophy className="w-16 h-16 text-muted-foreground mb-4 opacity-50" />
             <h3 className="text-xl font-bold mb-2">No Tournaments Yet</h3>
@@ -87,32 +122,45 @@ export default function Home() {
           </Card>
         ) : (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {tournaments.map(t => {
+            {displayed.map(t => {
               const isActive = t.id === activeTournamentId;
+              const isTest = t.is_test;
               return (
-                <Card 
-                  key={t.id} 
-                  className={`p-6 cursor-pointer transition-all duration-300 hover:shadow-xl hover:-translate-y-1 group ${isActive ? 'ring-2 ring-primary border-primary/50' : 'hover:border-primary/30'}`}
+                <Card
+                  key={t.id}
+                  className={`p-6 cursor-pointer transition-all duration-300 hover:shadow-xl hover:-translate-y-1 group ${
+                    isTest
+                      ? 'border-amber-300 bg-amber-50/50 dark:bg-amber-900/10 dark:border-amber-700/50'
+                      : isActive
+                      ? 'ring-2 ring-primary border-primary/50'
+                      : 'hover:border-primary/30'
+                  }`}
                   onClick={() => handleSelect(t.id)}
                 >
                   <div className="flex justify-between items-start mb-4">
-                    <div className="p-3 bg-primary/10 rounded-xl group-hover:bg-primary group-hover:text-white transition-colors">
-                      <Trophy className={`w-6 h-6 ${isActive ? 'text-primary group-hover:text-white' : 'text-primary'}`} />
+                    <div className={`p-3 rounded-xl transition-colors ${isTest ? 'bg-amber-100 dark:bg-amber-900/30' : 'bg-primary/10 group-hover:bg-primary group-hover:text-white'}`}>
+                      {isTest
+                        ? <FlaskConical className="w-6 h-6 text-amber-600 dark:text-amber-400" />
+                        : <Trophy className="w-6 h-6 text-primary group-hover:text-white transition-colors" />
+                      }
                     </div>
-                    {t.status === 'active' && <Badge variant="success" className="animate-pulse">Active</Badge>}
-                    {t.status === 'completed' && <Badge variant="outline">Completed</Badge>}
-                    {t.status === 'upcoming' && <Badge variant="warning">Upcoming</Badge>}
+                    <div className="flex items-center gap-2">
+                      {isTest && <Badge className="bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] uppercase font-bold">TEST</Badge>}
+                      {!isTest && t.status === 'active' && <Badge variant="success" className="animate-pulse">Active</Badge>}
+                      {!isTest && t.status === 'completed' && <Badge variant="outline">Completed</Badge>}
+                      {!isTest && t.status === 'upcoming' && <Badge variant="warning">Upcoming</Badge>}
+                    </div>
                   </div>
-                  
+
                   <h3 className="text-xl font-bold mb-1 truncate">{t.name}</h3>
                   <div className="flex items-center text-sm text-muted-foreground mb-6 gap-4">
                     <span className="flex items-center gap-1"><Activity className="w-4 h-4" /> Class {t.tournament_class}</span>
                     <span className="flex items-center gap-1"><Calendar className="w-4 h-4" /> {t.num_rounds} Rounds</span>
                   </div>
-                  
+
                   <div className="flex items-center justify-between mt-auto pt-4 border-t">
                     <span className="text-sm font-semibold text-foreground/70">{t.judge_count} Judges</span>
-                    <div className="flex items-center text-primary font-bold text-sm">
+                    <div className={`flex items-center font-bold text-sm ${isTest ? 'text-amber-600 dark:text-amber-400' : 'text-primary'}`}>
                       {isActive ? 'Continue' : 'Select'} <ChevronRight className="w-4 h-4 ml-1 group-hover:translate-x-1 transition-transform" />
                     </div>
                   </div>
@@ -125,22 +173,22 @@ export default function Home() {
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen} title="Create Tournament">
         <form onSubmit={handleCreate} className="space-y-4">
-          <Input 
-            label="Tournament Name" 
-            required 
-            value={formData.name} 
-            onChange={e => setFormData({...formData, name: e.target.value})} 
-            placeholder="e.g. 2025 Summer Slalom Open" 
+          <Input
+            label="Tournament Name"
+            required
+            value={formData.name}
+            onChange={e => setFormData({...formData, name: e.target.value})}
+            placeholder="e.g. 2025 Summer Slalom Open"
           />
-          <Select 
-            label="Tournament Class" 
-            value={formData.class} 
+          <Select
+            label="Tournament Class"
+            value={formData.class}
             onChange={e => setFormData({...formData, class: e.target.value})}
             options={TOURNAMENT_CLASSES.map(c => ({ label: `Class ${c}`, value: c }))}
           />
-          <Select 
-            label="Number of Judges" 
-            value={formData.judges} 
+          <Select
+            label="Number of Judges"
+            value={formData.judges}
             onChange={e => setFormData({...formData, judges: Number(e.target.value)})}
             options={[
               { label: '1 Judge (G Class / Practice)', value: 1 },
@@ -148,14 +196,26 @@ export default function Home() {
               { label: '5 Judges (R/E Class)', value: 5 },
             ]}
           />
-          <Input 
-            label="Number of Rounds" 
-            type="number" 
-            min="1" max="10" 
-            required 
-            value={formData.rounds} 
-            onChange={e => setFormData({...formData, rounds: Number(e.target.value)})} 
+          <Input
+            label="Number of Rounds"
+            type="number"
+            min="1" max="10"
+            required
+            value={formData.rounds}
+            onChange={e => setFormData({...formData, rounds: Number(e.target.value)})}
           />
+          <label className="flex items-center gap-3 cursor-pointer select-none p-3 rounded-xl border hover:bg-muted/50 transition-colors">
+            <input
+              type="checkbox"
+              checked={formData.is_test}
+              onChange={e => setFormData({...formData, is_test: e.target.checked})}
+              className="w-4 h-4 rounded accent-amber-500"
+            />
+            <div>
+              <p className="font-semibold text-sm">Mark as test tournament</p>
+              <p className="text-xs text-muted-foreground">Hidden from live views; only visible when "Show test data" is toggled on.</p>
+            </div>
+          </label>
           <div className="pt-4 flex justify-end gap-3">
             <Button type="button" variant="ghost" onClick={() => setCreateOpen(false)}>Cancel</Button>
             <Button type="submit" variant="primary" isLoading={createMutation.isPending}>Create Tournament</Button>

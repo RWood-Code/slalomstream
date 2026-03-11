@@ -14,6 +14,7 @@ export const tournamentsTable = pgTable("tournaments", {
   num_rounds: integer("num_rounds").notNull().default(2),
   admin_pin: text("admin_pin"),
   notes: text("notes"),
+  is_test: boolean("is_test").notNull().default(false),
   created_at: timestamp("created_at").notNull().defaultNow(),
   updated_at: timestamp("updated_at").notNull().defaultNow(),
 });

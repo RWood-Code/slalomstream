@@ -6,8 +6,10 @@ import { z } from "zod/v4";
 
 const router = Router();
 
-router.get("/", async (_req, res) => {
-  const tournaments = await db.select().from(tournamentsTable).orderBy(tournamentsTable.created_at);
+router.get("/", async (req, res) => {
+  const includeTest = req.query.include_test === "true";
+  const all = await db.select().from(tournamentsTable).orderBy(tournamentsTable.created_at);
+  const tournaments = includeTest ? all : all.filter(t => !t.is_test);
   res.json(tournaments);
 });
 
