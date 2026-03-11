@@ -1,0 +1,20 @@
+packages:
+  "framer-motion": "For stunning page transitions, modal animations, and micro-interactions"
+  "date-fns": "For formatting pass times and tournament dates"
+  "clsx": "For conditional class merging"
+  "tailwind-merge": "For merging tailwind utility classes safely"
+  "lucide-react": "For beautiful, consistent iconography"
+  "zustand": "For elegant global client state management (active tournament, judge auth)"
+
+images:
+  - path: "artifacts/slalom-stream/public/images/water-bg.png"
+    description: "Deep emerald green and dark teal abstract water ripples and waves, very subtle and professional, suitable for a dark mode hero background, 4k resolution"
+    aspect_ratio: "16:9"
+  - path: "artifacts/slalom-stream/public/images/logo-mark.png"
+    description: "Minimalist geometric waterski slalom buoy logo mark in vibrant emerald green on transparent background, modern sports technology aesthetic"
+    aspect_ratio: "1:1"
+
+notes:
+  - "Assuming @workspace/api-client-react exports all generated hooks and types directly from its index."
+  - "Implementing offline-first aesthetic with local storage fallback for active tournament selection and auth tokens."
+  - "Building responsive native-style UI with bottom navigation for mobile and sidebar for desktop."

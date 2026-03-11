@@ -1,22 +1,31 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: SlalomStream API - Tournament Recording & Scoring System
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: tournaments
+    description: Tournament management
+  - name: skiers
+    description: Skier management
+  - name: passes
+    description: Pass recording
+  - name: judgeScores
+    description: Judge score submission
+  - name: judges
+    description: Judge management
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +33,494 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /tournaments:
+    get:
+      operationId: listTournaments
+      tags: [tournaments]
+      summary: List all tournaments
+      responses:
+        "200":
+          description: List of tournaments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Tournament"
+    post:
+      operationId: createTournament
+      tags: [tournaments]
+      summary: Create a tournament
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTournamentRequest"
+      responses:
+        "201":
+          description: Created tournament
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tournament"
+
+  /tournaments/{id}:
+    get:
+      operationId: getTournament
+      tags: [tournaments]
+      summary: Get a tournament by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Tournament details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tournament"
+    put:
+      operationId: updateTournament
+      tags: [tournaments]
+      summary: Update a tournament
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTournamentRequest"
+      responses:
+        "200":
+          description: Updated tournament
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tournament"
+    delete:
+      operationId: deleteTournament
+      tags: [tournaments]
+      summary: Delete a tournament
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /tournaments/{id}/skiers:
+    get:
+      operationId: listSkiers
+      tags: [skiers]
+      summary: List skiers for a tournament
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of skiers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Skier"
+    post:
+      operationId: createSkier
+      tags: [skiers]
+      summary: Add a skier to a tournament
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSkierRequest"
+      responses:
+        "201":
+          description: Created skier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Skier"
+
+  /skiers/{id}:
+    put:
+      operationId: updateSkier
+      tags: [skiers]
+      summary: Update a skier
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSkierRequest"
+      responses:
+        "200":
+          description: Updated skier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Skier"
+    delete:
+      operationId: deleteSkier
+      tags: [skiers]
+      summary: Delete a skier
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /tournaments/{id}/passes:
+    get:
+      operationId: listPasses
+      tags: [passes]
+      summary: List passes for a tournament
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of passes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Pass"
+    post:
+      operationId: createPass
+      tags: [passes]
+      summary: Record a new pass
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePassRequest"
+      responses:
+        "201":
+          description: Created pass
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pass"
+
+  /passes/{id}:
+    get:
+      operationId: getPass
+      tags: [passes]
+      summary: Get a pass by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Pass details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pass"
+    put:
+      operationId: updatePass
+      tags: [passes]
+      summary: Update a pass
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePassRequest"
+      responses:
+        "200":
+          description: Updated pass
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pass"
+    delete:
+      operationId: deletePass
+      tags: [passes]
+      summary: Delete a pass
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /passes/{id}/judge-scores:
+    get:
+      operationId: listJudgeScores
+      tags: [judgeScores]
+      summary: Get judge scores for a pass
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of judge scores
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/JudgeScore"
+    post:
+      operationId: submitJudgeScore
+      tags: [judgeScores]
+      summary: Submit a judge score for a pass
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitJudgeScoreRequest"
+      responses:
+        "201":
+          description: Submitted judge score
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JudgeScore"
+
+  /tournaments/{id}/judge-scores:
+    get:
+      operationId: listTournamentJudgeScores
+      tags: [judgeScores]
+      summary: Get all judge scores for a tournament
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: All judge scores in tournament
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/JudgeScore"
+
+  /tournaments/{id}/judges:
+    get:
+      operationId: listJudges
+      tags: [judges]
+      summary: List judges for a tournament
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of judges
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Judge"
+    post:
+      operationId: createJudge
+      tags: [judges]
+      summary: Create a judge for a tournament
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateJudgeRequest"
+      responses:
+        "201":
+          description: Created judge
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Judge"
+
+  /judges/{id}:
+    put:
+      operationId: updateJudge
+      tags: [judges]
+      summary: Update a judge
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateJudgeRequest"
+      responses:
+        "200":
+          description: Updated judge
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Judge"
+    delete:
+      operationId: deleteJudge
+      tags: [judges]
+      summary: Delete a judge
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /judges/verify-pin:
+    post:
+      operationId: verifyJudgePin
+      tags: [judges]
+      summary: Verify a judge PIN and get judge info
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyPinRequest"
+      responses:
+        "200":
+          description: Judge info if PIN matches
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Judge"
+        "401":
+          description: Invalid PIN
+
+  /admin/verify-pin:
+    post:
+      operationId: verifyAdminPin
+      tags: [tournaments]
+      summary: Verify admin PIN
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminPinRequest"
+      responses:
+        "200":
+          description: Valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminPinResponse"
+        "401":
+          description: Invalid PIN
+
+  /settings:
+    get:
+      operationId: getSettings
+      tags: [tournaments]
+      summary: Get global app settings
+      responses:
+        "200":
+          description: App settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppSettings"
+    put:
+      operationId: updateSettings
+      tags: [tournaments]
+      summary: Update global app settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AppSettings"
+      responses:
+        "200":
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppSettings"
+
 components:
   schemas:
     HealthStatus:
@@ -31,6 +528,405 @@ components:
       properties:
         status:
           type: string
-      required:
-        - status
+      required: [status]
 
+    Tournament:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        status:
+          type: string
+          enum: [upcoming, active, completed]
+        judge_count:
+          type: integer
+          description: "1 (G class), 3 (L class), 5 (R/E class)"
+        tournament_class:
+          type: string
+          description: "G, L, R, E, EMS"
+        event_id:
+          type: string
+          nullable: true
+        event_sub_id:
+          type: string
+          nullable: true
+        region:
+          type: string
+          nullable: true
+        num_rounds:
+          type: integer
+        admin_pin:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required: [id, name, status, judge_count, tournament_class, num_rounds, created_at, updated_at]
+
+    CreateTournamentRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        tournament_class:
+          type: string
+        judge_count:
+          type: integer
+        event_id:
+          type: string
+          nullable: true
+        event_sub_id:
+          type: string
+          nullable: true
+        region:
+          type: string
+          nullable: true
+        num_rounds:
+          type: integer
+        admin_pin:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+      required: [name, tournament_class, judge_count, num_rounds]
+
+    UpdateTournamentRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          enum: [upcoming, active, completed]
+        tournament_class:
+          type: string
+        judge_count:
+          type: integer
+        event_id:
+          type: string
+          nullable: true
+        event_sub_id:
+          type: string
+          nullable: true
+        region:
+          type: string
+          nullable: true
+        num_rounds:
+          type: integer
+        admin_pin:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+
+    Skier:
+      type: object
+      properties:
+        id:
+          type: integer
+        tournament_id:
+          type: integer
+        first_name:
+          type: string
+        surname:
+          type: string
+        division:
+          type: string
+          nullable: true
+        skier_id:
+          type: string
+          nullable: true
+        pin:
+          type: string
+          nullable: true
+        is_financial:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+      required: [id, tournament_id, first_name, surname, is_financial, created_at]
+
+    CreateSkierRequest:
+      type: object
+      properties:
+        first_name:
+          type: string
+        surname:
+          type: string
+        division:
+          type: string
+          nullable: true
+        skier_id:
+          type: string
+          nullable: true
+        pin:
+          type: string
+          nullable: true
+        is_financial:
+          type: boolean
+      required: [first_name, surname, is_financial]
+
+    UpdateSkierRequest:
+      type: object
+      properties:
+        first_name:
+          type: string
+        surname:
+          type: string
+        division:
+          type: string
+          nullable: true
+        skier_id:
+          type: string
+          nullable: true
+        pin:
+          type: string
+          nullable: true
+        is_financial:
+          type: boolean
+
+    Pass:
+      type: object
+      properties:
+        id:
+          type: integer
+        tournament_id:
+          type: integer
+        skier_id:
+          type: integer
+        skier_name:
+          type: string
+        division:
+          type: string
+          nullable: true
+        rope_length:
+          type: number
+          description: Rope length in meters
+        speed_kph:
+          type: number
+          nullable: true
+        round_number:
+          type: integer
+        buoys_scored:
+          type: number
+          nullable: true
+          description: Final collated buoy score (0-6)
+        status:
+          type: string
+          enum: [pending, scored, complete]
+        start_time:
+          type: string
+          format: date-time
+          nullable: true
+        end_time:
+          type: string
+          format: date-time
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+      required: [id, tournament_id, skier_id, skier_name, rope_length, round_number, status, created_at]
+
+    CreatePassRequest:
+      type: object
+      properties:
+        skier_id:
+          type: integer
+        skier_name:
+          type: string
+        division:
+          type: string
+          nullable: true
+        rope_length:
+          type: number
+        speed_kph:
+          type: number
+          nullable: true
+        round_number:
+          type: integer
+        notes:
+          type: string
+          nullable: true
+      required: [skier_id, skier_name, rope_length, round_number]
+
+    UpdatePassRequest:
+      type: object
+      properties:
+        rope_length:
+          type: number
+        speed_kph:
+          type: number
+          nullable: true
+        round_number:
+          type: integer
+        buoys_scored:
+          type: number
+          nullable: true
+        status:
+          type: string
+          enum: [pending, scored, complete]
+        notes:
+          type: string
+          nullable: true
+        start_time:
+          type: string
+          format: date-time
+          nullable: true
+        end_time:
+          type: string
+          format: date-time
+          nullable: true
+
+    JudgeScore:
+      type: object
+      properties:
+        id:
+          type: integer
+        pass_id:
+          type: integer
+        tournament_id:
+          type: integer
+        judge_id:
+          type: integer
+          nullable: true
+        judge_name:
+          type: string
+        judge_role:
+          type: string
+          description: "judge_a, judge_b, boat_judge, judge_c, judge_d, judge_e"
+        judge_level:
+          type: string
+          nullable: true
+        pass_score:
+          type: string
+          description: "Score as string: 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, or 6_no_gates"
+        submitted_at:
+          type: string
+          format: date-time
+      required: [id, pass_id, tournament_id, judge_name, judge_role, pass_score, submitted_at]
+
+    SubmitJudgeScoreRequest:
+      type: object
+      properties:
+        tournament_id:
+          type: integer
+        judge_id:
+          type: integer
+          nullable: true
+        judge_name:
+          type: string
+        judge_role:
+          type: string
+        judge_level:
+          type: string
+          nullable: true
+        pass_score:
+          type: string
+      required: [tournament_id, judge_name, judge_role, pass_score]
+
+    Judge:
+      type: object
+      properties:
+        id:
+          type: integer
+        tournament_id:
+          type: integer
+        name:
+          type: string
+        judge_role:
+          type: string
+          description: "judge_a, judge_b, boat_judge, judge_d, judge_e, chief_judge, admin"
+        judge_level:
+          type: string
+          nullable: true
+        pin:
+          type: string
+          nullable: true
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+      required: [id, tournament_id, name, judge_role, is_active, created_at]
+
+    CreateJudgeRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        judge_role:
+          type: string
+        judge_level:
+          type: string
+          nullable: true
+        pin:
+          type: string
+          nullable: true
+        is_active:
+          type: boolean
+      required: [name, judge_role, is_active]
+
+    UpdateJudgeRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        judge_role:
+          type: string
+        judge_level:
+          type: string
+          nullable: true
+        pin:
+          type: string
+          nullable: true
+        is_active:
+          type: boolean
+
+    VerifyPinRequest:
+      type: object
+      properties:
+        tournament_id:
+          type: integer
+        pin:
+          type: string
+      required: [tournament_id, pin]
+
+    AdminPinRequest:
+      type: object
+      properties:
+        pin:
+          type: string
+      required: [pin]
+
+    AdminPinResponse:
+      type: object
+      properties:
+        valid:
+          type: boolean
+      required: [valid]
+
+    AppSettings:
+      type: object
+      properties:
+        admin_pin:
+          type: string
+          nullable: true
+        waterskiconnect_enabled:
+          type: boolean
+        active_tournament_id:
+          type: integer
+          nullable: true
+      required: [waterskiconnect_enabled]

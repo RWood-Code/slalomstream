@@ -4,6 +4,26 @@
 
 pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
 
+## Artifacts
+
+### SlalomStream (`artifacts/slalom-stream`)
+
+Digital scorecard for professional slalom waterski tournaments. A clone of slalom-stream-live.base44.app that runs offline.
+
+- **Preview path**: `/` (root)
+- **Stack**: React + Vite, Zustand, TanStack React Query, Tailwind CSS, Framer Motion, Lucide icons
+- **Features**:
+  - Tournament management (create/edit/delete, G/L/R/E class)
+  - Skier roster management with divisions and PINs
+  - Pass recording (rope length, speed, round)
+  - Multi-judge scoring with IWWF collation (1, 3, or 5 judges)
+  - Judge PIN authentication
+  - Live spectator scoreboard (auto-refresh every 5s)
+  - Admin panel (PIN-protected)
+  - Offline-capable (state stored in localStorage via Zustand persist)
+- **Pages**: Home, Recording, Judging, Scoreboard, Admin
+- **Colors**: Emerald green theme
+
 ## Stack
 
 - **Monorepo tool**: pnpm workspaces
