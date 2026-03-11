@@ -3,7 +3,7 @@ import { useAppStore } from '@/lib/store';
 import { useGetTournament, useListJudges, useListPasses, useSubmitJudgeScore, useVerifyJudgePin } from '@workspace/api-client-react';
 import { Card, Button, PageHeader, Dialog, Input, Select, Badge } from '@/components/ui/shared';
 import { ShieldAlert, CheckCircle2, RefreshCw } from 'lucide-react';
-import { VALID_IWWF_SCORES } from '@/lib/utils';
+import { VALID_IWWF_SCORES, getRopeColour, formatRope } from '@/lib/utils';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 
@@ -106,12 +106,14 @@ export default function Judging() {
                 </Badge>
               </div>
             </div>
-            <form onSubmit={handleLogin} className="space-y-5">
+            <form onSubmit={handleLogin} className="space-y-5" autoComplete="off">
               <Input
                 type="password"
                 inputMode="numeric"
                 maxLength={4}
                 autoFocus
+                autoComplete="new-password"
+                name="judge-pin-field"
                 className="text-center text-4xl tracking-widest h-16 font-mono"
                 placeholder="••••"
                 value={pin}
@@ -242,10 +244,20 @@ export default function Judging() {
             <h1 className="text-3xl md:text-5xl font-black font-display mb-2">
               {activePass.skier_name}
             </h1>
-            <div className="flex flex-wrap gap-4 text-emerald-200/80 font-semibold text-lg">
+            <div className="flex flex-wrap gap-3 text-emerald-200/80 font-semibold text-lg items-center">
               <span>{activePass.speed_kph} kph</span>
               <span>·</span>
-              <span>{activePass.rope_length}m rope</span>
+              {activePass.rope_length && (() => {
+                const c = getRopeColour(activePass.rope_length);
+                return (
+                  <span
+                    className="inline-flex items-center px-3 py-0.5 rounded-full font-bold text-base border-2"
+                    style={{ background: c.bg, color: c.text, borderColor: c.border }}
+                  >
+                    {formatRope(activePass.rope_length)}
+                  </span>
+                );
+              })()}
               <span>·</span>
               <span>Round {activePass.round_number}</span>
             </div>

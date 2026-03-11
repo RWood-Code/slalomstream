@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Card, Badge, Input, Select, PageHeader } from '@/components/ui/shared';
-import { Users, Search, CheckCircle2, XCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Card, Badge, Input, Select, PageHeader, Button } from '@/components/ui/shared';
+import { Users, Search, CheckCircle2, XCircle, ChevronDown, ChevronUp, KeyRound, Trash2, Save } from 'lucide-react';
 
 type Official = {
   id: number;
@@ -12,10 +12,20 @@ type Official = {
   slalom_grade: string | null;
   slalom_notes: string | null;
   is_active: boolean;
+  pin: string | null;
+  judge_role: string | null;
 };
 
 const REGIONS = ['All', 'Auckland', 'BOP', 'Canterbury', 'Central', 'Northland', 'Southern', 'Waikato'];
 const GRADES  = ['All', 'J1', 'J2', 'J2*', 'J3', 'J3*'];
+const JUDGE_ROLES_OPTIONS = [
+  { label: '— auto from grade —', value: '' },
+  { label: 'Judge A',    value: 'judge_a' },
+  { label: 'Judge B',    value: 'judge_b' },
+  { label: 'Judge C',    value: 'judge_c' },
+  { label: 'Boat Judge', value: 'boat_judge' },
+  { label: 'Chief Judge',value: 'chief_judge' },
+];
 
 const GRADE_COLOURS: Record<string, string> = {
   J1:  'bg-amber-100 text-amber-800 border-amber-300',
@@ -41,6 +51,106 @@ function GradeBadge({ grade }: { grade: string | null }) {
   );
 }
 
+function SetPinPanel({ official, onClose, onSaved }: {
+  official: Official;
+  onClose: () => void;
+  onSaved: (updated: Official) => void;
+}) {
+  const [pinVal, setPinVal] = useState(official.pin ?? '');
+  const [roleVal, setRoleVal] = useState(official.judge_role ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const save = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/officials/${official.id}/pin`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: pinVal, judge_role: roleVal }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const updated = await res.json();
+      onSaved(updated);
+      onClose();
+    } catch (e: any) {
+      setError(e.message || 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const clear = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/officials/${official.id}/pin`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: '', judge_role: '' }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const updated = await res.json();
+      onSaved(updated);
+      onClose();
+    } catch (e: any) {
+      setError(e.message || 'Clear failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <tr className="bg-primary/5 border-t-0">
+      <td colSpan={6} className="px-4 pb-3 pt-1">
+        <div className="flex flex-wrap gap-3 items-end">
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block mb-1">Judge PIN</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              autoComplete="new-password"
+              name="official-pin-field"
+              className="h-9 w-24 border border-input rounded-lg px-3 text-sm font-mono bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+              placeholder="1234"
+              value={pinVal}
+              onChange={e => setPinVal(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block mb-1">Default Role</label>
+            <select
+              className="h-9 border border-input rounded-lg px-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+              value={roleVal}
+              onChange={e => setRoleVal(e.target.value)}
+            >
+              {JUDGE_ROLES_OPTIONS.map(o => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+          <Button size="sm" variant="primary" onClick={save} isLoading={saving} className="flex items-center gap-1.5 h-9">
+            <Save className="w-3.5 h-3.5" /> Save PIN
+          </Button>
+          {official.pin && (
+            <Button size="sm" variant="outline" onClick={clear} isLoading={saving} className="flex items-center gap-1.5 h-9 text-destructive border-destructive/30 hover:bg-destructive/5">
+              <Trash2 className="w-3.5 h-3.5" /> Clear PIN
+            </Button>
+          )}
+          <button onClick={onClose} className="text-sm text-muted-foreground hover:text-foreground ml-2">Cancel</button>
+          {error && <span className="text-xs text-destructive">{error}</span>}
+        </div>
+        <p className="text-[10px] text-muted-foreground mt-2">
+          When a PIN is set this official appears automatically in the judge login for any tournament.
+          Their role defaults to their grade unless overridden here.
+        </p>
+      </td>
+    </tr>
+  );
+}
+
 type SortKey = 'surname' | 'region' | 'slalom_grade';
 
 export default function Officials() {
@@ -50,6 +160,8 @@ export default function Officials() {
   const [financialOnly, setFinancialOnly] = useState(false);
   const [sort, setSort] = useState<SortKey>('surname');
   const [sortAsc, setSortAsc] = useState(true);
+  const [expandedPinId, setExpandedPinId] = useState<number | null>(null);
+  const queryClient = useQueryClient();
 
   const { data: officials = [], isLoading } = useQuery<Official[]>({
     queryKey: ['officials'],
@@ -59,6 +171,12 @@ export default function Officials() {
       return res.json();
     },
   });
+
+  const handlePinSaved = (updated: Official) => {
+    queryClient.setQueryData<Official[]>(['officials'], prev =>
+      prev ? prev.map(o => o.id === updated.id ? updated : o) : prev
+    );
+  };
 
   const filtered = useMemo(() => {
     let list = officials.filter(o => o.is_active);
@@ -202,29 +320,52 @@ export default function Officials() {
                     Slalom Grade <SortIcon k="slalom_grade" />
                   </th>
                   <th className="px-4 py-3 text-center">Financial</th>
+                  <th className="px-4 py-3 text-center">Judge PIN</th>
                   <th className="px-4 py-3">Notes</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
                 {filtered.map(o => (
-                  <tr key={o.id} className="hover:bg-muted/40 transition-colors">
-                    <td className="px-4 py-3 font-semibold whitespace-nowrap">
-                      {o.first_name} {o.surname}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="text-muted-foreground text-xs font-medium">{o.region}</span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <GradeBadge grade={o.slalom_grade} />
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      {o.financial
-                        ? <CheckCircle2 className="w-4 h-4 text-emerald-500 mx-auto" />
-                        : <XCircle className="w-4 h-4 text-muted-foreground/40 mx-auto" />
-                      }
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">{o.slalom_notes ?? ''}</td>
-                  </tr>
+                  <React.Fragment key={o.id}>
+                    <tr className="hover:bg-muted/40 transition-colors">
+                      <td className="px-4 py-3 font-semibold whitespace-nowrap">
+                        {o.first_name} {o.surname}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-muted-foreground text-xs font-medium">{o.region}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <GradeBadge grade={o.slalom_grade} />
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {o.financial
+                          ? <CheckCircle2 className="w-4 h-4 text-emerald-500 mx-auto" />
+                          : <XCircle className="w-4 h-4 text-muted-foreground/40 mx-auto" />
+                        }
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <button
+                          onClick={() => setExpandedPinId(expandedPinId === o.id ? null : o.id)}
+                          className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border transition-colors ${
+                            o.pin
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-800'
+                              : 'bg-muted text-muted-foreground border-border hover:border-primary/40'
+                          }`}
+                        >
+                          <KeyRound className="w-3 h-3" />
+                          {o.pin ? 'PIN set' : 'Set PIN'}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground text-xs">{o.slalom_notes ?? ''}</td>
+                    </tr>
+                    {expandedPinId === o.id && (
+                      <SetPinPanel
+                        official={o}
+                        onClose={() => setExpandedPinId(null)}
+                        onSaved={handlePinSaved}
+                      />
+                    )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>

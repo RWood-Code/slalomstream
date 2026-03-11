@@ -9,6 +9,10 @@ export const officialsRegisterTable = pgTable("officials_register", {
   slalom_grade: text("slalom_grade"),
   slalom_notes: text("slalom_notes"),
   is_active: boolean("is_active").notNull().default(true),
+  /** PIN set by the official — when set they are auto-available as a judge in any tournament */
+  pin: text("pin"),
+  /** Default judge role when no per-tournament assignment exists */
+  judge_role: text("judge_role"),
   created_at: timestamp("created_at").notNull().defaultNow(),
 });
 

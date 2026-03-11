@@ -23,7 +23,8 @@ Digital scorecard for professional slalom waterski tournaments. A clone of slalo
   - Offline-capable (state stored in localStorage via Zustand persist)
 - **Pages**: Home, Recording, Judging, Scoreboard, Officials, Admin, Help
 - **Colors**: Emerald green theme
-- **NZTWSA Officials Register**: 135 officials seeded from NZTWSA register (13 Feb 2026), filterable by region/grade/financial status
+- **NZTWSA Officials Register**: 135 officials seeded from NZTWSA register (13 Feb 2026), filterable by region/grade/financial status. Officials with a PIN set are auto-available as judges in any tournament (no per-tournament setup needed). Set PINs via the Officials page — click "Set PIN" on any row.
+- **IWWF 2026 rope colours**: `getRopeColour()` in utils.ts maps all shortline lengths to IWWF official colours (Red=18.25m, Orange=16m, Yellow=14.25m, Green=13m, Blue=12m, Violet=11.25m, Pink=10.25m, Black=9.75m). Colour badges shown on Recording, Judging, and Scoreboard pages.
 - **SurePath integration**: WaterskiConnect WebSocket client (`services/surepath-client.ts`) auto-connects when enabled; creates passes on speed trigger; configurable Event Name, Sub ID, Observer PIN, WS URL
 - **WaterskiConnect webhook**: `POST /api/waterskiconnect/inbound` for manual scoring software push; status at `GET /api/waterskiconnect/status`
 - **Test data**: test tournament with 8 skiers, 3 judges (PINs 1111/2222/3333), 6 scored passes. Run `pnpm --filter @workspace/db run seed:test` to re-seed

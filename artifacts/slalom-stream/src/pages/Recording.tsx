@@ -8,9 +8,9 @@ import { Card, Button, Badge, PageHeader, Select, Input } from '@/components/ui/
 import {
   Play, SquareSquare, Timer, User, Wifi, ChevronDown, ChevronUp,
   Camera, CameraOff, Circle, Square, Maximize2, RefreshCw,
-  Gauge, MonitorPlay, CheckCircle2
+  Gauge, MonitorPlay, CheckCircle2, Download, ExternalLink
 } from 'lucide-react';
-import { ROPE_LENGTHS, SPEEDS, formatRope, formatSpeed } from '@/lib/utils';
+import { ROPE_LENGTHS, SPEEDS, formatRope, formatSpeed, getRopeColour } from '@/lib/utils';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { QRCodeSVG } from 'qrcode.react';
@@ -179,10 +179,21 @@ function useVideoRecorder() {
     };
   }, []);
 
+  const downloadRecording = useCallback((skierName?: string) => {
+    if (!replayUrl) return;
+    const name = skierName ? `${skierName.replace(/\s+/g, '-')}-` : '';
+    const a = document.createElement('a');
+    a.href = replayUrl;
+    a.download = `slalom-${name}${Date.now()}.webm`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }, [replayUrl]);
+
   return {
     videoRef, mode, replayUrl, playbackRate, error, pipActive,
     startCamera, stopCamera, startRecording, stopRecording, backToPreview,
-    setSpeed, togglePiP,
+    setSpeed, togglePiP, downloadRecording,
   };
 }
 
@@ -216,7 +227,7 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
 
       {/* Idle state */}
       {mode === 'idle' && (
-        <div className="w-full aspect-video flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 gap-4">
+        <div className="w-full aspect-video flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 gap-4 px-6 text-center">
           <Camera className="w-14 h-14 text-slate-500" />
           <p className="text-slate-400 text-sm font-medium">Camera offline</p>
           <Button
@@ -226,7 +237,26 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
           >
             <Camera className="w-4 h-4" /> Enable Camera
           </Button>
-          {error && <p className="text-red-400 text-xs text-center px-4">{error}</p>}
+          {error && (
+            <div className="space-y-2">
+              <p className="text-red-400 text-xs">{error}</p>
+              {(error.toLowerCase().includes('permission') || error.toLowerCase().includes('allow') || error.toLowerCase().includes('denied')) && (
+                <div className="bg-amber-900/40 border border-amber-700/50 rounded-lg px-3 py-2 space-y-1">
+                  <p className="text-amber-300 text-xs font-semibold">Camera tip</p>
+                  <p className="text-amber-200/80 text-[11px] leading-tight">
+                    Camera may be blocked if viewing inside a browser preview pane.
+                    Open the app in a full browser tab to allow camera access.
+                  </p>
+                  <button
+                    onClick={() => window.open(window.location.href, '_blank')}
+                    className="mt-1 flex items-center gap-1.5 text-amber-300 hover:text-amber-200 text-[11px] font-semibold underline"
+                  >
+                    <ExternalLink className="w-3 h-3" /> Open in new tab
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -536,8 +566,7 @@ export default function Recording() {
                   variant="primary"
                   size="sm"
                   onClick={video.startRecording}
-                  disabled={!activePass}
-                  title={!activePass ? "Start a pass first to record" : "Start recording manually"}
+                  title="Start recording manually"
                   className="flex items-center gap-2"
                 >
                   <Circle className="w-3.5 h-3.5 fill-current" /> Record
@@ -561,12 +590,21 @@ export default function Recording() {
                   <Button variant="outline" size="sm" onClick={() => { if (video.videoRef.current) { video.videoRef.current.currentTime = 0; video.videoRef.current.play(); } }}>
                     <RefreshCw className="w-3.5 h-3.5" />
                   </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => video.downloadRecording(activePass?.skier_name ?? undefined)}
+                    className="flex items-center gap-2"
+                    title="Download recording — your browser will ask where to save it"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Save
+                  </Button>
                 </>
               )}
               <span className="text-xs text-muted-foreground ml-1">
-                {video.mode === 'preview' && 'Camera live — recording starts automatically when pass begins'}
+                {video.mode === 'preview' && 'Camera live — recording starts automatically when a pass begins'}
                 {video.mode === 'recording' && 'Recording… will stop and replay automatically when pass ends'}
-                {video.mode === 'replay' && 'Instant replay — use speed controls or Picture-in-Picture'}
+                {video.mode === 'replay' && 'Instant replay — Save to download the .webm file'}
               </span>
             </div>
           )}
@@ -588,8 +626,19 @@ export default function Recording() {
                 <div className="p-5 bg-primary/10 rounded-2xl border border-primary/20 text-center space-y-2">
                   <p className="text-xs font-bold text-primary uppercase tracking-widest">On water now</p>
                   <p className="text-3xl font-display font-bold">{activePass.skier_name}</p>
-                  <p className="text-muted-foreground font-semibold text-sm">
-                    Rnd {activePass.round_number} · {formatSpeed(activePass.speed_kph)} · {formatRope(activePass.rope_length)}
+                  <p className="text-muted-foreground font-semibold text-sm flex items-center justify-center gap-2">
+                    Rnd {activePass.round_number} · {formatSpeed(activePass.speed_kph)}
+                    {activePass.rope_length && (() => {
+                      const c = getRopeColour(activePass.rope_length);
+                      return (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold border"
+                          style={{ background: c.bg, color: c.text, borderColor: c.border }}
+                        >
+                          {formatRope(activePass.rope_length)}
+                        </span>
+                      );
+                    })()}
                   </p>
                 </div>
                 <Button
@@ -660,12 +709,22 @@ export default function Recording() {
               <Card className="p-6 text-center text-muted-foreground border-dashed text-sm">No passes yet.</Card>
             ) : (
               <div className="space-y-2">
-                {recentPasses.map(pass => (
+                {recentPasses.map(pass => {
+                  const rc = pass.rope_length ? getRopeColour(pass.rope_length) : null;
+                  return (
                   <Card key={pass.id} className="p-3 hover:border-primary/50 transition-colors flex justify-between items-center">
                     <div>
                       <p className="font-bold text-sm">{pass.skier_name}</p>
-                      <p className="text-[11px] text-muted-foreground font-semibold">
-                        R{pass.round_number} · {pass.speed_kph}kph · {pass.rope_length}m
+                      <p className="text-[11px] text-muted-foreground font-semibold flex items-center gap-1.5 flex-wrap">
+                        R{pass.round_number} · {pass.speed_kph}kph
+                        {rc && pass.rope_length && (
+                          <span
+                            className="inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold"
+                            style={{ background: rc.bg, color: rc.text, borderColor: rc.border }}
+                          >
+                            {pass.rope_length}m
+                          </span>
+                        )}
                       </p>
                     </div>
                     <div className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200 px-3 py-1 rounded-lg text-center min-w-[3rem]">
@@ -673,7 +732,8 @@ export default function Recording() {
                       <p className="font-display font-black text-lg leading-none">{pass.buoys_scored ?? '—'}</p>
                     </div>
                   </Card>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

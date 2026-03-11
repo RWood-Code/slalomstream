@@ -34,9 +34,11 @@ export default function Admin() {
           <Shield className="w-16 h-16 text-primary mx-auto mb-6" />
           <h2 className="text-2xl font-display font-bold mb-2">Admin Access Required</h2>
           <p className="text-muted-foreground mb-8">Enter the master admin PIN to manage tournament settings.</p>
-          <form onSubmit={handleLogin} className="space-y-4">
+          <form onSubmit={handleLogin} className="space-y-4" autoComplete="off">
             <Input
               type="password"
+              autoComplete="new-password"
+              name="admin-pin-field"
               className="text-center tracking-widest text-2xl h-14 font-mono"
               placeholder="••••"
               value={pinInput}
@@ -135,6 +137,8 @@ function AppSettingsPanel() {
               label="New Admin PIN (4 digits)"
               type="password"
               maxLength={4}
+              autoComplete="new-password"
+              name="new-admin-pin-field"
               placeholder="Leave blank to keep existing"
               value={adminPin}
               onChange={e => setAdminPin(e.target.value)}
@@ -834,10 +838,11 @@ function JudgeManagement({ tournamentId }: { tournamentId: number }) {
         <Badge variant="outline" className="ml-auto">{judges?.length ?? 0} judges</Badge>
       </div>
       <div className="p-6">
-        <form onSubmit={onSubmit} className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end mb-6">
+        <form onSubmit={onSubmit} className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end mb-6" autoComplete="off">
           <Input
             label="Full Name"
             required
+            autoComplete="off"
             value={form.name}
             onChange={e => setForm({...form, name: e.target.value})}
             className="h-10 col-span-2 sm:col-span-1"
@@ -862,6 +867,8 @@ function JudgeManagement({ tournamentId }: { tournamentId: number }) {
               type="password"
               maxLength={4}
               required
+              autoComplete="new-password"
+              name="judge-new-pin-field"
               value={form.pin}
               onChange={e => setForm({...form, pin: e.target.value})}
               className="h-10 font-mono tracking-widest w-20"
@@ -883,29 +890,45 @@ function JudgeManagement({ tournamentId }: { tournamentId: number }) {
               </tr>
             </thead>
             <tbody className="divide-y">
-              {judges?.map(j => (
-                <tr key={j.id} className="hover:bg-muted/50 group">
-                  <td className="px-4 py-3 font-semibold">{j.name}</td>
-                  <td className="px-4 py-3">
-                    <Badge variant="outline" className="font-semibold">{ROLE_LABELS[j.judge_role] ?? j.judge_role}</Badge>
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground text-xs">{(j as any).judge_level || '—'}</td>
-                  <td className="px-4 py-3 text-center">
-                    {j.pin
-                      ? <CheckCircle2 className="w-4 h-4 text-emerald-500 mx-auto" />
-                      : <XCircle className="w-4 h-4 text-muted-foreground mx-auto" />
-                    }
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      onClick={() => deleteJudge(j.id)}
-                      className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {judges?.map(j => {
+                const isOfficial = (j as any).is_official;
+                return (
+                  <tr key={j.id} className={`hover:bg-muted/50 group ${isOfficial ? 'bg-primary/5' : ''}`}>
+                    <td className="px-4 py-3 font-semibold">
+                      {j.name}
+                      {isOfficial && (
+                        <span className="ml-2 text-[10px] font-bold text-primary bg-primary/10 px-1.5 py-0.5 rounded uppercase tracking-wide">
+                          Officials Register
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge variant="outline" className="font-semibold">{ROLE_LABELS[j.judge_role] ?? j.judge_role}</Badge>
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground text-xs">
+                      {isOfficial ? ((j as any).slalom_grade || '—') : ((j as any).judge_level || '—')}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      {isOfficial
+                        ? <CheckCircle2 className="w-4 h-4 text-primary mx-auto" />
+                        : j.pin
+                          ? <CheckCircle2 className="w-4 h-4 text-emerald-500 mx-auto" />
+                          : <XCircle className="w-4 h-4 text-muted-foreground mx-auto" />
+                      }
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {!isOfficial && (
+                        <button
+                          onClick={() => deleteJudge(j.id)}
+                          className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
               {(!judges || judges.length === 0) && (
                 <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No judges in the register. Add judges above.</td></tr>
               )}
@@ -914,7 +937,7 @@ function JudgeManagement({ tournamentId }: { tournamentId: number }) {
         </div>
 
         <p className="text-xs text-muted-foreground mt-3">
-          Each judge needs a unique 4-digit PIN to log in on the Judge tab. Hover a row to reveal the delete button.
+          Manually added judges above are specific to this tournament. Officials from the NZTWSA Register with a PIN set (configured on the Officials page) appear automatically in all tournaments — shown above with the "Officials Register" badge.
         </p>
       </div>
     </Card>

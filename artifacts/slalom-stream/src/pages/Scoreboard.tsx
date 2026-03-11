@@ -3,7 +3,7 @@ import { useAppStore } from '@/lib/store';
 import { useGetTournament, useListPasses } from '@workspace/api-client-react';
 import { Card, Badge } from '@/components/ui/shared';
 import { Trophy, Activity } from 'lucide-react';
-import { formatRope } from '@/lib/utils';
+import { formatRope, getRopeColour } from '@/lib/utils';
 
 export default function Scoreboard() {
   const { activeTournamentId } = useAppStore();
@@ -77,8 +77,19 @@ export default function Scoreboard() {
                     </div>
                     <div className="flex-1 px-4">
                       <p className="font-bold text-lg leading-none mb-1">{skier.name}</p>
-                      <p className="text-xs text-muted-foreground uppercase font-semibold tracking-wider">
-                        {skier.passesCount} Passes • Best Rope: {formatRope(skier.bestRope)}
+                      <p className="text-xs text-muted-foreground uppercase font-semibold tracking-wider flex items-center gap-2 flex-wrap">
+                        {skier.passesCount} Passes • Best Rope:
+                        {(() => {
+                          const c = getRopeColour(skier.bestRope);
+                          return (
+                            <span
+                              className="inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold normal-case tracking-normal"
+                              style={{ background: c.bg, color: c.text, borderColor: c.border }}
+                            >
+                              {formatRope(skier.bestRope)}
+                            </span>
+                          );
+                        })()}
                       </p>
                     </div>
                     <div className="text-right">
