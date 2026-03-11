@@ -2,10 +2,104 @@ import React, { useState } from 'react';
 import { useAppStore } from '@/lib/store';
 import { useGetTournament, useListSkiers, useListPasses, useCreatePass, useUpdatePass } from '@workspace/api-client-react';
 import { Card, Button, Badge, PageHeader, Select, Input } from '@/components/ui/shared';
-import { Play, SquareSquare, Timer, ArrowRight, User } from 'lucide-react';
+import { Play, SquareSquare, Timer, User, Wifi, ChevronDown, ChevronUp } from 'lucide-react';
 import { ROPE_LENGTHS, SPEEDS, formatRope, formatSpeed } from '@/lib/utils';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
+import { QRCodeSVG } from 'qrcode.react';
+
+interface NetworkInfo {
+  addresses: { name: string; address: string; family: string }[];
+  port: string;
+  urls: string[];
+}
+
+function useNetworkInfo() {
+  return useQuery<NetworkInfo>({
+    queryKey: ['network-info'],
+    queryFn: async () => {
+      const res = await fetch('/api/network-info');
+      if (!res.ok) throw new Error('Failed to fetch network info');
+      return res.json();
+    },
+    refetchInterval: 30000,
+    staleTime: 15000,
+  });
+}
+
+function JudgeConnectPanel() {
+  const [open, setOpen] = useState(false);
+  const { data: network } = useNetworkInfo();
+  const currentUrl = window.location.origin;
+  const judgeUrl = `${currentUrl}/judging`;
+
+  const localUrls = network?.urls?.map(u => u.replace(/:\d+$/, '') + window.location.port ? `:${window.location.port}` : '') || [];
+  const displayUrl = network?.urls?.[0]
+    ? `http://${network.urls[0].split('//')[1].split(':')[0]}:${window.location.port || network.port}/judging`
+    : judgeUrl;
+
+  return (
+    <Card className="overflow-hidden border-primary/20">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between p-4 hover:bg-muted/40 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+            <Wifi className="w-4 h-4 text-primary" />
+          </div>
+          <div className="text-left">
+            <p className="font-bold text-sm">Judge Connect</p>
+            <p className="text-[11px] text-muted-foreground">Scan QR code to connect judge devices</p>
+          </div>
+        </div>
+        {open ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+      </button>
+
+      {open && (
+        <div className="border-t p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row gap-6 items-start">
+            <div className="flex-shrink-0 p-3 bg-white rounded-2xl shadow-sm border">
+              <QRCodeSVG
+                value={displayUrl}
+                size={160}
+                level="M"
+                fgColor="#064e3b"
+                bgColor="#ffffff"
+              />
+            </div>
+            <div className="space-y-3 flex-1">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">Judge URL</p>
+                <p className="font-mono text-sm bg-muted px-3 py-2 rounded-lg break-all">{displayUrl}</p>
+              </div>
+              {network?.urls && network.urls.length > 0 && (
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">Local Network Addresses</p>
+                  <div className="space-y-1">
+                    {network.urls.map((url, i) => {
+                      const judgeLocal = url.replace(/:\d+$/, `:${window.location.port || network.port}`) + '/judging';
+                      return (
+                        <p key={i} className="font-mono text-xs bg-emerald-50 text-emerald-800 px-3 py-1.5 rounded-lg">
+                          {judgeLocal}
+                        </p>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              <div className="pt-1 space-y-1 text-xs text-muted-foreground">
+                <p>1. Connect judge devices to the same WiFi network as this computer.</p>
+                <p>2. Scan the QR code or type the URL into any browser.</p>
+                <p>3. Judges select their name and enter their PIN to log in.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
 
 export default function Recording() {
   const { activeTournamentId } = useAppStore();
@@ -68,12 +162,12 @@ export default function Recording() {
     if (!activePass) return;
     updateMutation.mutate({
       id: activePass.id,
-      data: { status: 'scored' } // Assuming 'scored' means operator closed it. The actual score comes from judges.
+      data: { status: 'scored' }
     });
   };
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <PageHeader 
         title="Pass Recording" 
         subtitle="Operator Control Panel" 
@@ -83,6 +177,8 @@ export default function Recording() {
           </Badge>
         }
       />
+
+      <JudgeConnectPanel />
 
       <div className="grid lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-6">
