@@ -8,7 +8,7 @@ import { Card, Button, Badge, PageHeader, Select, Input } from '@/components/ui/
 import {
   Play, SquareSquare, Timer, User, Wifi, ChevronDown, ChevronUp,
   Camera, CameraOff, Circle, Square, Maximize2, RefreshCw,
-  Gauge, MonitorPlay, CheckCircle2, Download, ExternalLink
+  Gauge, MonitorPlay, CheckCircle2, Download, ExternalLink, SwitchCamera
 } from 'lucide-react';
 import { ROPE_LENGTHS, SPEEDS, formatRope, formatSpeed, getRopeColour, getJudgingPanel } from '@/lib/utils';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
@@ -52,23 +52,69 @@ function usePassJudgeScores(passId: number | null) {
 // ─── Video hook ────────────────────────────────────────────────────────────────
 type VideoMode = 'idle' | 'preview' | 'recording' | 'replay';
 
+export interface VideoDevice { deviceId: string; label: string; }
+
 function useVideoRecorder() {
   const [mode, setMode] = useState<VideoMode>('idle');
   const [replayUrl, setReplayUrl] = useState<string | null>(null);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [pipActive, setPipActive] = useState(false);
+  const [devices, setDevices] = useState<VideoDevice[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
-  const startCamera = useCallback(async () => {
-    setError(null);
+  // Enumerate video input devices — labels only available after permission
+  const refreshDevices = useCallback(async () => {
     try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      const cams = all
+        .filter(d => d.kind === 'videoinput')
+        .map((d, i) => ({
+          deviceId: d.deviceId,
+          label: d.label || `Camera ${i + 1}`,
+        }));
+      setDevices(cams);
+      // Auto-select first device if nothing selected yet
+      setSelectedDeviceId(prev => {
+        if (prev) return prev;
+        return cams[0]?.deviceId ?? '';
+      });
+    } catch {
+      // enumerateDevices not supported — silently ignore
+    }
+  }, []);
+
+  // Enumerate on mount (may get empty labels before permission granted)
+  useEffect(() => {
+    refreshDevices();
+    navigator.mediaDevices?.addEventListener?.('devicechange', refreshDevices);
+    return () => {
+      navigator.mediaDevices?.removeEventListener?.('devicechange', refreshDevices);
+    };
+  }, [refreshDevices]);
+
+  const startCamera = useCallback(async (deviceId?: string) => {
+    setError(null);
+    const targetDevice = deviceId ?? selectedDeviceId;
+    try {
+      // Stop any existing stream first
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+
+      const videoConstraints: MediaTrackConstraints = {
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 60 },
+      };
+      if (targetDevice) videoConstraints.deviceId = { exact: targetDevice };
+
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } },
+        video: videoConstraints,
         audio: false,
       });
       streamRef.current = stream;
@@ -77,11 +123,14 @@ function useVideoRecorder() {
         videoRef.current.muted = true;
         videoRef.current.play().catch(() => {});
       }
+      if (targetDevice) setSelectedDeviceId(targetDevice);
+      // Re-enumerate now that we have permission — labels will be populated
+      await refreshDevices();
       setMode('preview');
     } catch (err: any) {
       setError(err.message || 'Camera access denied');
     }
-  }, []);
+  }, [selectedDeviceId, refreshDevices]);
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach(t => t.stop());
@@ -201,6 +250,7 @@ function useVideoRecorder() {
 
   return {
     videoRef, mode, replayUrl, playbackRate, error, pipActive,
+    devices, selectedDeviceId, setSelectedDeviceId,
     startCamera, stopCamera, startRecording, stopRecording, backToPreview,
     setSpeed, togglePiP, downloadRecording,
   };
@@ -238,9 +288,25 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
         <div className="w-full aspect-video flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 gap-4 px-6 text-center">
           <Camera className="w-14 h-14 text-slate-500" />
           <p className="text-slate-400 text-sm font-medium">Camera offline</p>
+
+          {/* Device picker */}
+          {video.devices.length > 1 && (
+            <div className="w-full max-w-xs">
+              <select
+                value={video.selectedDeviceId}
+                onChange={e => video.setSelectedDeviceId(e.target.value)}
+                className="w-full text-sm rounded-lg bg-slate-700 border border-slate-600 text-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                {video.devices.map(d => (
+                  <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <Button
             variant="primary"
-            onClick={video.startCamera}
+            onClick={() => video.startCamera()}
             className="flex items-center gap-2"
           >
             <Camera className="w-4 h-4" /> Enable Camera
@@ -322,6 +388,23 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
                 >
                   <CameraOff className="w-4 h-4" />
                 </button>
+              )}
+              {/* Camera switcher — shown when live/recording and multiple devices available */}
+              {(mode === 'preview' || mode === 'recording') && video.devices.length > 1 && (
+                <div className="flex items-center gap-1">
+                  <SwitchCamera className="w-3.5 h-3.5 text-white/50 shrink-0" />
+                  <select
+                    value={video.selectedDeviceId}
+                    onChange={e => video.startCamera(e.target.value)}
+                    disabled={mode === 'recording'}
+                    className="text-[11px] bg-white/10 border border-white/20 text-white rounded px-1.5 py-0.5 focus:outline-none disabled:opacity-40 max-w-[130px] truncate"
+                    title={mode === 'recording' ? 'Cannot switch camera while recording' : 'Switch camera'}
+                  >
+                    {video.devices.map(d => (
+                      <option key={d.deviceId} value={d.deviceId} className="bg-slate-800 text-white">{d.label}</option>
+                    ))}
+                  </select>
+                </div>
               )}
               {mode === 'replay' && (
                 <>
