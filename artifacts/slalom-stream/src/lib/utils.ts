@@ -5,7 +5,7 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-// Slalom Waterski Domain Logic
+// ─── Slalom Domain Constants ───────────────────────────────────────────────────
 export const VALID_IWWF_SCORES = ['1', '1.5', '2', '2.5', '3', '3.5', '4', '4.5', '5', '5.5', '6', '6_no_gates'];
 export const ROPE_LENGTHS = [23, 18.25, 16, 14.25, 13, 12, 11.25, 10.75, 10.25, 9.75];
 export const SPEEDS = [34, 37, 40, 43, 46, 49, 52, 55, 58];
@@ -21,15 +21,50 @@ export const DIVISIONS = [
   'O65 Men', 'O65 Women',
   'Amateur',
 ];
-export const JUDGE_ROLES = ['judge_a', 'judge_b', 'boat_judge', 'judge_c', 'judge_d', 'judge_e', 'chief_judge'];
 
-export function getJudgeRoles(judgeCount: number): string[] {
-  if (judgeCount === 1) return ['judge_a'];
-  if (judgeCount === 3) return ['judge_a', 'judge_b', 'boat_judge'];
-  if (judgeCount === 5) return ['judge_a', 'judge_b', 'boat_judge', 'judge_d', 'judge_e'];
-  return ['judge_a'];
+// ─── Judging Panel Logic ───────────────────────────────────────────────────────
+// IWWF slalom panels: 1, 3, or 5 judges.
+// The highest-numbered judge in the panel is also the Boat Judge.
+// With 1 judge, Judge A is also Chief Judge and Boat Judge.
+
+export type PanelStation = {
+  role: string;
+  label: string;       // e.g. "Judge A", "Judge C / Boat"
+  shortLabel: string;  // e.g. "A", "C"
+  isBoat: boolean;
+  isChiefOnly: boolean; // true only for the standalone chief_judge role
+};
+
+/** Returns the scoring stations for a panel of the given size. */
+export function getJudgingPanel(judgeCount: number): PanelStation[] {
+  const count = judgeCount <= 1 ? 1 : judgeCount <= 3 ? 3 : 5;
+  const letters = ['A', 'B', 'C', 'D', 'E'];
+
+  return Array.from({ length: count }, (_, i) => {
+    const isLast = i === count - 1;
+    const isBoat = count > 1 && isLast;
+    const letter = letters[i];
+    return {
+      role: `judge_${letter.toLowerCase()}`,
+      label: isBoat ? `Judge ${letter} / Boat` : `Judge ${letter}`,
+      shortLabel: letter,
+      isBoat,
+      isChiefOnly: false,
+    };
+  });
 }
 
+/** The roles whose scores are counted in the scoring collation. */
+export const SCORING_ROLES = ['judge_a', 'judge_b', 'judge_c', 'judge_d', 'judge_e'];
+
+export function getScoringRoles(judgeCount: number): string[] {
+  return SCORING_ROLES.slice(0, Math.min(Math.max(judgeCount, 1), 5));
+}
+
+/** All possible judge roles (scoring + oversight). */
+export const JUDGE_ROLES = [...SCORING_ROLES, 'chief_judge'];
+
+// ─── Scoring Maths ────────────────────────────────────────────────────────────
 export function scoreToNumber(score: string): number {
   if (score === '6_no_gates') return 6;
   const parsed = parseFloat(score);
@@ -37,11 +72,12 @@ export function scoreToNumber(score: string): number {
 }
 
 export function formatScoreDisplay(score: string | number | null | undefined): string {
-  if (score === null || score === undefined) return '-';
+  if (score === null || score === undefined) return '—';
   if (score === '6_no_gates') return '6 No Gates';
   return String(score);
 }
 
+/** IWWF median collation — works for any panel size. */
 export function collateScores(scores: string[]): number {
   if (scores.length === 0) return 0;
   const nums = scores.map(scoreToNumber).sort((a, b) => a - b);
@@ -52,20 +88,7 @@ export function collateScores(scores: string[]): number {
   return nums[mid];
 }
 
-/**
- * IWWF official slalom rope loop colour coding (2026 rules)
- * Source: IWWF Waterski Rulebook, shortline loop identification
- *   23m  = neutral / no shortening  (white/none)
- *   18.25 = Red       (15 off)
- *   16    = Orange    (22 off)
- *   14.25 = Yellow    (28 off)
- *   13    = Green     (32 off)
- *   12    = Blue      (35 off)
- *   11.25 = Violet    (38 off)
- *   10.75 = no standard colour (silver/grey)
- *   10.25 = Pink      (41 off)
- *   9.75  = Black     (43 off)
- */
+// ─── Rope colour coding (IWWF 2026) ───────────────────────────────────────────
 export const ROPE_COLOURS: Record<number, { bg: string; text: string; border: string; label: string }> = {
   23:    { bg: '#f8fafc', text: '#475569', border: '#cbd5e1', label: 'Full' },
   18.25: { bg: '#fef2f2', text: '#dc2626', border: '#ef4444', label: 'Red' },
@@ -88,6 +111,6 @@ export function formatRope(rope: number): string {
 }
 
 export function formatSpeed(speed: number | null | undefined): string {
-  if (!speed) return '-';
+  if (!speed) return '—';
   return `${speed}kph`;
 }

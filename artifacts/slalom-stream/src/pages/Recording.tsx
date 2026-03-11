@@ -10,7 +10,7 @@ import {
   Camera, CameraOff, Circle, Square, Maximize2, RefreshCw,
   Gauge, MonitorPlay, CheckCircle2, Download, ExternalLink
 } from 'lucide-react';
-import { ROPE_LENGTHS, SPEEDS, formatRope, formatSpeed, getRopeColour } from '@/lib/utils';
+import { ROPE_LENGTHS, SPEEDS, formatRope, formatSpeed, getRopeColour, getJudgingPanel } from '@/lib/utils';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { QRCodeSVG } from 'qrcode.react';
@@ -209,8 +209,7 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
   const { mode, videoRef, error, pipActive, playbackRate } = video;
 
   const ROLE_SHORT: Record<string, string> = {
-    judge_a: 'A', judge_b: 'B', judge_c: 'C',
-    judge_d: 'D', judge_e: 'E', boat_judge: 'Boat', chief_judge: 'CJ',
+    judge_a: 'A', judge_b: 'B', judge_c: 'C', judge_d: 'D', judge_e: 'E', chief_judge: 'CJ',
   };
 
   return (
@@ -354,23 +353,24 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
   );
 }
 
-// ─── Static Role QR Connect Panel ──────────────────────────────────────────────
+// ─── Tournament-aware Judge Station QR Panel ───────────────────────────────────
 // QR codes encode the JUDGING POSITION (role), not the person.
-// Any official with a valid PIN can scan any station QR and log in as that role.
-// These QR codes are static — print once, use forever.
-const JUDGING_STATIONS = [
-  { role: 'judge_a',     label: 'Judge A',     short: 'A' },
-  { role: 'judge_b',     label: 'Judge B',     short: 'B' },
-  { role: 'judge_c',     label: 'Judge C',     short: 'C' },
-  { role: 'judge_d',     label: 'Judge D',     short: 'D' },
-  { role: 'judge_e',     label: 'Judge E',     short: 'E' },
-  { role: 'boat_judge',  label: 'Boat Judge',  short: 'BJ' },
-  { role: 'chief_judge', label: 'Chief Judge', short: 'CJ' },
-];
-
-function JudgeConnectPanel({ tournamentId: _tournamentId }: { tournamentId: number }) {
+// Stations shown depend on the tournament's judge_count:
+//   1 judge  → Judge A only (also Chief & Boat)
+//   3 judges → Judge A, B, C/Boat + Chief Judge
+//   5 judges → Judge A, B, C, D, E/Boat + Chief Judge
+function JudgeConnectPanel({ tournament }: { tournament: any }) {
   const [open, setOpen] = useState(false);
   const { data: network } = useNetworkInfo();
+
+  const judgeCount = tournament?.judge_count ?? 1;
+  const panel = getJudgingPanel(judgeCount);
+
+  // Add Chief Judge QR unless 1-judge (where A is also chief)
+  const stations = [
+    ...panel.map(s => ({ role: s.role, label: s.label })),
+    ...(judgeCount > 1 ? [{ role: 'chief_judge', label: 'Chief Judge' }] : []),
+  ];
 
   const getBase = () => {
     if (network?.urls?.[0]) {
@@ -396,7 +396,7 @@ function JudgeConnectPanel({ tournamentId: _tournamentId }: { tournamentId: numb
           <div className="text-left">
             <p className="font-bold text-sm">Judge Station QR Codes</p>
             <p className="text-[11px] text-muted-foreground">
-              Static — one per judging position. Any official scans, enters their PIN.
+              {judgeCount}-judge panel · {stations.length} station{stations.length !== 1 ? 's' : ''}. Any official scans, enters PIN.
             </p>
           </div>
         </div>
@@ -406,12 +406,12 @@ function JudgeConnectPanel({ tournamentId: _tournamentId }: { tournamentId: numb
       {open && (
         <div className="border-t p-5 space-y-4">
           <p className="text-xs text-muted-foreground">
-            Place each QR code at the matching judging station. Any official or judge with a valid PIN scans the QR for
-            their <strong>position</strong> and enters their PIN — the system identifies them automatically.
-            These codes never change between tournaments.
+            Place each QR code at the matching judging station. Any official with a valid PIN scans
+            their <strong>position's</strong> QR and enters their PIN — the system identifies them automatically.
+            The Boat Judge scans the <strong>{panel.find(s => s.isBoat)?.label ?? 'last judge'}</strong> station.
           </p>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-            {JUDGING_STATIONS.map(station => {
+            {stations.map(station => {
               const url = getRoleUrl(station.role);
               return (
                 <div key={station.role} className="flex flex-col items-center gap-2 p-3 rounded-xl border bg-card hover:border-primary/40 transition-colors">
@@ -434,8 +434,8 @@ function JudgeConnectPanel({ tournamentId: _tournamentId }: { tournamentId: numb
           </div>
           {network?.urls?.[0] && (
             <p className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3">
-              <strong>Setup:</strong> Connect all judge devices to the same WiFi network as this computer ({network.urls[0]}).
-              Judges scan their station QR and enter their personal PIN. No configuration needed per tournament.
+              <strong>Setup:</strong> Connect all judge devices to the same WiFi network ({network.urls[0]}).
+              Judges scan their station QR and enter their personal PIN. No setup needed per tournament.
             </p>
           )}
         </div>
@@ -607,7 +607,7 @@ export default function Recording() {
             </div>
           )}
 
-          <JudgeConnectPanel tournamentId={activeTournamentId} />
+          <JudgeConnectPanel tournament={tournament} />
         </div>
 
         {/* ── Right column: Pass control + recent passes ── */}
@@ -754,8 +754,7 @@ function JudgeScoreStatusBar({ passId }: { passId: number }) {
   }
 
   const ROLE_SHORT: Record<string, string> = {
-    judge_a: 'A', judge_b: 'B', judge_c: 'C',
-    judge_d: 'D', judge_e: 'E', boat_judge: 'Boat', chief_judge: 'CJ',
+    judge_a: 'A', judge_b: 'B', judge_c: 'C', judge_d: 'D', judge_e: 'E', chief_judge: 'CJ',
   };
 
   return (

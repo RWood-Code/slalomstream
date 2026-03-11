@@ -1,36 +1,28 @@
 import React, { useState, useEffect } from 'react';
 import { useAppStore } from '@/lib/store';
 import {
-  useListPasses, useListSkiers,
+  useGetTournament, useListPasses, useListSkiers,
   useSubmitJudgeScore, useVerifyJudgePin, useCreatePass, useUpdatePass
 } from '@workspace/api-client-react';
 import { Card, Button, Input, Select, Badge } from '@/components/ui/shared';
-import { ShieldAlert, CheckCircle2, RefreshCw, Play, Square, ChevronDown, ChevronUp, Edit2 } from 'lucide-react';
-import { VALID_IWWF_SCORES, getRopeColour, formatRope, ROPE_LENGTHS, SPEEDS, formatSpeed } from '@/lib/utils';
-import { useQueryClient } from '@tanstack/react-query';
+import {
+  ShieldAlert, CheckCircle2, RefreshCw, Play, Square,
+  ChevronDown, ChevronUp, Edit2, Clock, AlertCircle, Pencil, X
+} from 'lucide-react';
+import {
+  VALID_IWWF_SCORES, getRopeColour, formatRope, ROPE_LENGTHS, SPEEDS, formatSpeed,
+  getJudgingPanel, getScoringRoles, collateScores, formatScoreDisplay,
+} from '@/lib/utils';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 
-// ─── Role constants ────────────────────────────────────────────────────────────
-export const JUDGE_ROLES = [
-  { value: 'judge_a',     label: 'Judge A' },
-  { value: 'judge_b',     label: 'Judge B' },
-  { value: 'judge_c',     label: 'Judge C' },
-  { value: 'judge_d',     label: 'Judge D' },
-  { value: 'judge_e',     label: 'Judge E' },
-  { value: 'boat_judge',  label: 'Boat Judge' },
-  { value: 'chief_judge', label: 'Chief Judge' },
-];
-export function roleLabel(role: string | null | undefined) {
-  return JUDGE_ROLES.find(r => r.value === role)?.label ?? (role ?? 'Judge');
-}
-
-// Read ?role= from the current URL (static role QR codes)
+// Read ?role= from the URL (static role QR codes)
 function usePreselectedRole(): string | null {
   if (typeof window === 'undefined') return null;
   return new URLSearchParams(window.location.search).get('role');
 }
 
-// ─── Judge A: Start Pass Panel ─────────────────────────────────────────────────
+// ─── Judge A / Chief: Start Pass Panel ────────────────────────────────────────
 function StartPassPanel({ tournamentId }: { tournamentId: number }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -83,42 +75,22 @@ function StartPassPanel({ tournamentId }: { tournamentId: number }) {
         className="h-11"
       />
       <div className="grid grid-cols-2 gap-3">
-        <Select
-          label="Rope"
-          value={rope}
-          onChange={e => setRope(e.target.value)}
-          options={ROPE_LENGTHS.map(r => ({ label: formatRope(r), value: r }))}
-          className="h-11"
-        />
-        <Select
-          label="Speed"
-          value={speed}
-          onChange={e => setSpeed(e.target.value)}
-          options={SPEEDS.map(s => ({ label: formatSpeed(s), value: s }))}
-          className="h-11"
-        />
+        <Select label="Rope" value={rope} onChange={e => setRope(e.target.value)}
+          options={ROPE_LENGTHS.map(r => ({ label: formatRope(r), value: r }))} className="h-11" />
+        <Select label="Speed" value={speed} onChange={e => setSpeed(e.target.value)}
+          options={SPEEDS.map(s => ({ label: formatSpeed(s), value: s }))} className="h-11" />
       </div>
-      <Input
-        label="Round"
-        type="number"
-        min="1"
-        value={round}
-        onChange={e => setRound(e.target.value)}
-        className="h-11"
-      />
-      <Button
-        variant="primary"
-        className="w-full h-14 text-lg font-bold shadow-lg shadow-primary/20"
-        onClick={handleStart}
-        isLoading={createMutation.isPending}
-      >
+      <Input label="Round" type="number" min="1" value={round}
+        onChange={e => setRound(e.target.value)} className="h-11" />
+      <Button variant="primary" className="w-full h-14 text-lg font-bold shadow-lg shadow-primary/20"
+        onClick={handleStart} isLoading={createMutation.isPending}>
         <Play className="w-5 h-5 mr-2 fill-current" /> START PASS
       </Button>
     </div>
   );
 }
 
-// ─── Judge A: Active Pass Controls ─────────────────────────────────────────────
+// ─── Judge A / Chief: Active Pass Controls ─────────────────────────────────────
 function ActivePassControls({ pass, tournamentId }: { pass: any; tournamentId: number }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -134,12 +106,12 @@ function ActivePassControls({ pass, tournamentId }: { pass: any; tournamentId: n
   const [showUpdate, setShowUpdate] = useState(false);
   const [rope, setRope] = useState(String(pass.rope_length));
   const [speed, setSpeed] = useState(String(pass.speed_kph ?? ''));
-  const [savingUpdate, setSavingUpdate] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const handleEnd = () => updateMutation.mutate({ id: pass.id, data: { status: 'scored' } });
 
   const handleUpdate = async () => {
-    setSavingUpdate(true);
+    setSaving(true);
     try {
       await fetch(`/api/passes/${pass.id}`, {
         method: 'PUT',
@@ -149,25 +121,17 @@ function ActivePassControls({ pass, tournamentId }: { pass: any; tournamentId: n
       queryClient.invalidateQueries({ queryKey: ['/api/tournaments', tournamentId, 'passes'] });
       toast({ title: 'Pass details updated' });
       setShowUpdate(false);
-    } finally {
-      setSavingUpdate(false);
-    }
+    } finally { setSaving(false); }
   };
 
   return (
     <div className="space-y-3">
-      <Button
-        variant="destructive"
-        className="w-full h-14 text-base font-bold shadow-lg"
-        onClick={handleEnd}
-        isLoading={updateMutation.isPending}
-      >
+      <Button variant="destructive" className="w-full h-14 text-base font-bold shadow-lg"
+        onClick={handleEnd} isLoading={updateMutation.isPending}>
         <Square className="w-4 h-4 mr-2 fill-current" /> END PASS / COLLATE SCORES
       </Button>
-      <button
-        className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors w-full justify-center py-1"
-        onClick={() => setShowUpdate(v => !v)}
-      >
+      <button className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors w-full justify-center py-1"
+        onClick={() => setShowUpdate(v => !v)}>
         <Edit2 className="w-3.5 h-3.5" />
         {showUpdate ? 'Hide' : 'Fix pass details (rope / speed)'}
         {showUpdate ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
@@ -178,7 +142,7 @@ function ActivePassControls({ pass, tournamentId }: { pass: any; tournamentId: n
             options={ROPE_LENGTHS.map(r => ({ label: `${r}m`, value: r }))} className="h-10" />
           <Select label="Speed" value={speed} onChange={e => setSpeed(e.target.value)}
             options={SPEEDS.map(s => ({ label: `${s}kph`, value: s }))} className="h-10" />
-          <Button variant="primary" size="sm" onClick={handleUpdate} isLoading={savingUpdate} className="h-10">Save</Button>
+          <Button variant="primary" size="sm" onClick={handleUpdate} isLoading={saving} className="h-10">Save</Button>
         </div>
       )}
     </div>
@@ -224,174 +188,79 @@ function ScorePad({ onScore, submittedScore, disabled }: {
   );
 }
 
-// ─── Main Page ─────────────────────────────────────────────────────────────────
-export default function Judging() {
-  const { activeTournamentId, activeJudgeId, activeJudgeName, activeJudgeRole, setJudgeSession } = useAppStore();
+// ─── Chief Judge: Review + Correction View ─────────────────────────────────────
+function ChiefJudgeView({
+  tournamentId, judgeCount, activeJudgeName,
+}: {
+  tournamentId: number;
+  judgeCount: number;
+  activeJudgeName: string | null;
+}) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-
-  // ?role= comes from a static role-based QR code
-  const preselectedRole = usePreselectedRole();
-  const isJudgeA = activeJudgeRole === 'judge_a';
-
-  const { data: passes, refetch: refetchPasses } = useListPasses(activeTournamentId || 0, {
-    query: { enabled: !!activeTournamentId },
+  const { data: passes, refetch: refetchPasses } = useListPasses(tournamentId, {
+    query: { enabled: true },
     request: { refetchInterval: 3000 } as any,
   });
 
-  const verifyMutation = useVerifyJudgePin();
-  const submitMutation = useSubmitJudgeScore({
-    mutation: {
-      onSuccess: () => {
-        toast({ title: 'Score submitted!' });
-        queryClient.invalidateQueries({ queryKey: ['/api/tournaments', activeTournamentId, 'passes'] });
-      }
-    }
+  const activePass = passes?.find(p => p.status === 'pending');
+  const recentPasses = passes
+    ?.filter(p => p.status !== 'pending')
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, 5) || [];
+
+  const panel = getJudgingPanel(judgeCount);
+  const scoringRoles = getScoringRoles(judgeCount);
+
+  // Fetch all judge scores for the active pass (poll every 2s)
+  const { data: judgeScores = [] } = useQuery<any[]>({
+    queryKey: ['pass-judge-scores-cj', activePass?.id],
+    queryFn: async () => {
+      if (!activePass?.id) return [];
+      const r = await fetch(`/api/passes/${activePass.id}/judge-scores`);
+      return r.ok ? r.json() : [];
+    },
+    enabled: !!activePass,
+    refetchInterval: 2000,
   });
 
-  // For manual login (no QR): user picks their role first
-  const [selectedRole, setSelectedRole] = useState(preselectedRole ?? '');
-  const [pin, setPin] = useState('');
-  const [submittedScore, setSubmittedScore] = useState<string | null>(null);
-  const [judgeAOpen, setJudgeAOpen] = useState(true);
+  // Score correction state
+  const [editingScoreId, setEditingScoreId] = useState<number | null>(null);
+  const [correcting, setCorrecting] = useState(false);
 
-  // Active pass tracking
-  const activePass = passes?.find(p => p.status === 'pending');
-  const activePassId = activePass?.id;
-  useEffect(() => { setSubmittedScore(null); }, [activePassId]);
-
-  if (!activeTournamentId) {
-    return (
-      <div className="max-w-md mx-auto mt-20 text-center space-y-4 px-4">
-        <p className="text-xl text-muted-foreground">No active tournament.</p>
-        <p className="text-sm text-muted-foreground">Select a tournament from the Home page first.</p>
-      </div>
-    );
-  }
-
-  // ── Not logged in ─────────────────────────────────────────────────────────
-  if (!activeJudgeId) {
-    // Determine which role to authenticate into
-    const loginRole = preselectedRole || selectedRole;
-    const loginRoleLabel = roleLabel(loginRole);
-    const showPinEntry = !!loginRole;
-
-    const handleLogin = (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!loginRole || !pin) return;
-      verifyMutation.mutate(
-        { data: { tournament_id: activeTournamentId, pin } },
-        {
-          onSuccess: (data) => {
-            // Role comes from the QR/selection, NOT from the judge's stored role
-            setJudgeSession(data.id, loginRole, data.name);
-            setPin('');
-          },
-          onError: () => toast({ title: 'Invalid PIN', variant: 'destructive' }),
-        }
-      );
-    };
-
-    return (
-      <div className="min-h-[100dvh] flex items-center justify-center p-4 bg-background">
-        <Card className="w-full max-w-sm p-8 border-primary/20 shadow-2xl">
-          <div className="text-center mb-8">
-            <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
-              <ShieldAlert className="w-8 h-8 text-primary" />
-            </div>
-            {showPinEntry ? (
-              <>
-                <h2 className="text-2xl font-bold font-display">{loginRoleLabel} Station</h2>
-                <p className="text-muted-foreground mt-2 text-sm">Enter your judge PIN to begin scoring.</p>
-              </>
-            ) : (
-              <>
-                <h2 className="text-2xl font-bold font-display">Judge Login</h2>
-                <p className="text-muted-foreground mt-2 text-sm">
-                  Select your position, then enter your PIN. Or scan the QR code at your station.
-                </p>
-              </>
-            )}
-          </div>
-
-          {!showPinEntry ? (
-            /* Step 1: select role */
-            <div className="space-y-6">
-              <Select
-                label="I am judging as…"
-                value={selectedRole}
-                onChange={e => setSelectedRole(e.target.value)}
-                options={[
-                  { label: '— Select position —', value: '' },
-                  ...JUDGE_ROLES.map(r => ({ label: r.label, value: r.value }))
-                ]}
-              />
-              <Button variant="primary" className="w-full h-12 text-lg" disabled={!selectedRole}
-                onClick={() => {}}>
-                Continue →
-              </Button>
-            </div>
-          ) : (
-            /* Step 2: enter PIN */
-            <form onSubmit={handleLogin} className="space-y-5" autoComplete="off">
-              {!preselectedRole && (
-                <div className="text-center">
-                  <Badge variant="outline" className="font-semibold text-sm px-3 py-1">{loginRoleLabel}</Badge>
-                </div>
-              )}
-              <Input
-                type="password"
-                inputMode="numeric"
-                maxLength={6}
-                autoFocus
-                autoComplete="new-password"
-                name="judge-pin-field"
-                className="text-center text-4xl tracking-widest h-16 font-mono"
-                placeholder="••••"
-                value={pin}
-                onChange={e => setPin(e.target.value)}
-              />
-              <Button variant="primary" type="submit" className="w-full h-12 text-lg"
-                isLoading={verifyMutation.isPending}>
-                Login
-              </Button>
-              {!preselectedRole && (
-                <button
-                  type="button"
-                  className="w-full text-center text-sm text-muted-foreground hover:text-foreground transition-colors"
-                  onClick={() => setSelectedRole('')}
-                >
-                  ← Change position
-                </button>
-              )}
-            </form>
-          )}
-        </Card>
-      </div>
-    );
-  }
-
-  // ── Logged in ──────────────────────────────────────────────────────────────
-  const handleScore = (scoreStr: string) => {
-    if (!activePass || !activeJudgeName || !activeJudgeRole) return;
-    setSubmittedScore(scoreStr);
-    submitMutation.mutate({
-      id: activePass.id,
-      data: {
-        tournament_id: activeTournamentId,
-        judge_id: activeJudgeId,
-        judge_name: activeJudgeName,
-        judge_role: activeJudgeRole,
-        pass_score: scoreStr,
+  const handleCorrect = async (scoreId: number, newScore: string) => {
+    if (!activePass) return;
+    setCorrecting(true);
+    try {
+      const r = await fetch(`/api/passes/${activePass.id}/judge-scores/${scoreId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pass_score: newScore }),
+      });
+      if (r.ok) {
+        toast({ title: 'Score corrected' });
+        queryClient.invalidateQueries({ queryKey: ['pass-judge-scores-cj', activePass.id] });
+        queryClient.invalidateQueries({ queryKey: ['/api/tournaments', tournamentId, 'passes'] });
+        setEditingScoreId(null);
+      } else {
+        toast({ title: 'Correction failed', variant: 'destructive' });
       }
-    });
+    } finally { setCorrecting(false); }
   };
+
+  // Projected collation from current scoring-panel scores
+  const panelScores = judgeScores.filter(s => scoringRoles.includes(s.judge_role));
+  const projectedScore = panelScores.length > 0
+    ? collateScores(panelScores.map(s => s.pass_score))
+    : null;
 
   const ropeColour = activePass ? getRopeColour(activePass.rope_length) : null;
 
+  const [controlOpen, setControlOpen] = useState(true);
+
   return (
-    <div className="flex flex-col min-h-[100dvh] pb-16 bg-background">
-      {/* ── Pass header ─────────────────────────────────────────────── */}
+    <div className="flex flex-col min-h-[100dvh] pb-20 bg-background">
+      {/* ── Pass header ── */}
       {activePass ? (
         <div className="bg-emerald-950 text-white px-4 pt-4 pb-3 sticky top-0 z-10 shadow-lg">
           <div className="flex items-start justify-between gap-3 max-w-2xl mx-auto">
@@ -435,7 +304,439 @@ export default function Judging() {
         </div>
       )}
 
-      {/* ── Main content ───────────────────────────────────────────────── */}
+      <div className="flex-1 px-3 py-3 max-w-2xl w-full mx-auto space-y-3">
+        {activePass ? (
+          <>
+            {/* ── Score review panel ── */}
+            <Card className="overflow-hidden border-amber-200 dark:border-amber-800">
+              <div className="px-4 py-3 bg-amber-50 dark:bg-amber-900/30 border-b border-amber-200 dark:border-amber-800">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-sm flex items-center gap-2 text-amber-900 dark:text-amber-200">
+                    <CheckCircle2 className="w-4 h-4" />
+                    Scoring Panel ({judgeCount} judge{judgeCount !== 1 ? 's' : ''})
+                  </h3>
+                  {projectedScore !== null && (
+                    <div className="text-right">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+                        Projected ({panelScores.length}/{judgeCount})
+                      </p>
+                      <p className="font-display font-black text-xl text-amber-900 dark:text-amber-100 leading-none">
+                        {projectedScore}
+                      </p>
+                    </div>
+                  )}
+                  {projectedScore === null && (
+                    <p className="text-[11px] text-amber-600 dark:text-amber-400 animate-pulse">
+                      Waiting for scores…
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="divide-y">
+                {panel.map(station => {
+                  const score = judgeScores.find(s => s.judge_role === station.role);
+                  const isEditing = editingScoreId === score?.id;
+
+                  return (
+                    <div key={station.role} className="px-4 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-black flex-shrink-0 ${score ? 'bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-300' : 'bg-muted text-muted-foreground'}`}>
+                            {station.shortLabel}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-semibold text-sm leading-tight">{station.label}</p>
+                            {score && (
+                              <p className="text-[10px] text-muted-foreground truncate">{score.judge_name}</p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          {score ? (
+                            <>
+                              <span className={`font-display font-black text-xl ${isEditing ? 'text-muted-foreground line-through' : 'text-emerald-700 dark:text-emerald-300'}`}>
+                                {formatScoreDisplay(score.pass_score)}
+                              </span>
+                              <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                              {!isEditing && (
+                                <button
+                                  onClick={() => setEditingScoreId(score.id)}
+                                  className="p-1.5 rounded-lg text-muted-foreground hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/30 transition-colors"
+                                  title="Correct this score"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {isEditing && (
+                                <button
+                                  onClick={() => setEditingScoreId(null)}
+                                  className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground transition-colors"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </>
+                          ) : (
+                            <span className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
+                              <Clock className="w-3.5 h-3.5 animate-pulse" /> Waiting
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Inline correction picker */}
+                      {isEditing && score && (
+                        <div className="mt-3 pt-3 border-t border-dashed">
+                          <p className="text-xs font-bold text-amber-700 dark:text-amber-400 mb-2 flex items-center gap-1.5">
+                            <AlertCircle className="w-3.5 h-3.5" />
+                            Chief Judge correction — select new score:
+                          </p>
+                          <div className="grid grid-cols-6 gap-1.5">
+                            {VALID_IWWF_SCORES.map(s => (
+                              <button
+                                key={s}
+                                disabled={correcting}
+                                onClick={() => handleCorrect(score.id, s)}
+                                className={`h-10 rounded-xl text-sm font-black transition-all active:scale-95
+                                  disabled:opacity-50 border-2
+                                  ${s === score.pass_score
+                                    ? 'bg-primary text-primary-foreground border-primary'
+                                    : 'bg-card border-border hover:border-primary/50 hover:bg-primary/5 hover:text-primary'
+                                  }`}
+                              >
+                                {s === '6_no_gates' ? '6*' : s}
+                              </button>
+                            ))}
+                          </div>
+                          <p className="text-[10px] text-muted-foreground mt-1.5">* 6 No Gates</p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+
+            {/* ── Pass controls ── */}
+            <Card className="overflow-hidden border-primary/20">
+              <button onClick={() => setControlOpen(v => !v)}
+                className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/40 transition-colors">
+                <span className="text-sm font-bold flex items-center gap-2">
+                  <Play className="w-3.5 h-3.5 text-primary" /> Chief Judge Controls
+                </span>
+                {controlOpen ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+              </button>
+              {controlOpen && (
+                <div className="border-t px-4 pb-4 pt-3">
+                  <ActivePassControls pass={activePass} tournamentId={tournamentId} />
+                </div>
+              )}
+            </Card>
+          </>
+        ) : (
+          /* No active pass: show start form + recent results */
+          <>
+            <Card className="overflow-hidden border-primary/20">
+              <button onClick={() => setControlOpen(v => !v)}
+                className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/40 transition-colors">
+                <span className="text-sm font-bold flex items-center gap-2">
+                  <Play className="w-3.5 h-3.5 text-primary" /> Start Next Pass
+                </span>
+                {controlOpen ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+              </button>
+              {controlOpen && (
+                <div className="border-t px-4 pb-4 pt-3">
+                  <StartPassPanel tournamentId={tournamentId} />
+                </div>
+              )}
+            </Card>
+
+            {recentPasses.length > 0 && (
+              <div>
+                <h3 className="text-sm font-bold text-muted-foreground mb-2 px-1">Recent Results</h3>
+                <div className="space-y-2">
+                  {recentPasses.map(pass => {
+                    const rc = pass.rope_length ? getRopeColour(pass.rope_length) : null;
+                    return (
+                      <Card key={pass.id} className="px-4 py-3 flex items-center justify-between">
+                        <div className="min-w-0">
+                          <p className="font-bold text-sm truncate">{pass.skier_name}</p>
+                          <p className="text-[11px] text-muted-foreground flex items-center gap-1.5 font-semibold flex-wrap">
+                            R{pass.round_number} · {pass.speed_kph}kph
+                            {rc && pass.rope_length && (
+                              <span className="px-1.5 py-0.5 rounded border text-[10px] font-bold"
+                                style={{ background: rc.bg, color: rc.text, borderColor: rc.border }}>
+                                {pass.rope_length}m
+                              </span>
+                            )}
+                          </p>
+                        </div>
+                        <div className="bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200 px-3 py-1 rounded-lg text-center min-w-[3rem] ml-3">
+                          <p className="text-[9px] uppercase font-bold opacity-70">Score</p>
+                          <p className="font-display font-black text-lg leading-none">{pass.buoys_scored ?? '—'}</p>
+                        </div>
+                      </Card>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* ── Fixed identity bar ── */}
+      <div className="fixed bottom-0 inset-x-0 bg-card/95 backdrop-blur border-t px-4 py-3 z-20 shadow-2xl">
+        <div className="flex items-center justify-between max-w-2xl mx-auto">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 bg-amber-100 dark:bg-amber-900/50 rounded-full flex items-center justify-center text-amber-700 dark:text-amber-300 font-black text-base flex-shrink-0">
+              {activeJudgeName?.[0]}
+            </div>
+            <div className="min-w-0">
+              <p className="font-bold text-sm leading-tight truncate">{activeJudgeName}</p>
+              <p className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-widest">Chief Judge</p>
+            </div>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => useAppStore.getState().setJudgeSession(null, null, null)}>
+            Logout
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Judging Page ─────────────────────────────────────────────────────────
+export default function Judging() {
+  const { activeTournamentId, activeJudgeId, activeJudgeName, activeJudgeRole, setJudgeSession } = useAppStore();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  const preselectedRole = usePreselectedRole();
+
+  const { data: tournament } = useGetTournament(activeTournamentId || 0, {
+    query: { enabled: !!activeTournamentId },
+  });
+
+  const judgeCount = tournament?.judge_count ?? 1;
+  const panel = getJudgingPanel(judgeCount);
+
+  // Build login dropdown options: panel stations + chief judge (omit chief if judgeCount=1 since A is chief)
+  const loginOptions = [
+    ...panel.map(s => ({ value: s.role, label: s.label })),
+    ...(judgeCount > 1 ? [{ value: 'chief_judge', label: 'Chief Judge' }] : []),
+  ];
+
+  const { data: passes, refetch: refetchPasses } = useListPasses(activeTournamentId || 0, {
+    query: { enabled: !!activeTournamentId },
+    request: { refetchInterval: 3000 } as any,
+  });
+
+  const verifyMutation = useVerifyJudgePin();
+  const submitMutation = useSubmitJudgeScore({
+    mutation: {
+      onSuccess: () => {
+        toast({ title: 'Score submitted!' });
+        queryClient.invalidateQueries({ queryKey: ['/api/tournaments', activeTournamentId, 'passes'] });
+      }
+    }
+  });
+
+  const [selectedRole, setSelectedRole] = useState(preselectedRole ?? '');
+  const [pin, setPin] = useState('');
+  const [submittedScore, setSubmittedScore] = useState<string | null>(null);
+  const [judgeAOpen, setJudgeAOpen] = useState(true);
+
+  const activePass = passes?.find(p => p.status === 'pending');
+  const activePassId = activePass?.id;
+  useEffect(() => { setSubmittedScore(null); }, [activePassId]);
+
+  if (!activeTournamentId) {
+    return (
+      <div className="max-w-md mx-auto mt-20 text-center space-y-4 px-4">
+        <p className="text-xl text-muted-foreground">No active tournament.</p>
+        <p className="text-sm text-muted-foreground">Select a tournament from the Home page first.</p>
+      </div>
+    );
+  }
+
+  // ── Not logged in ────────────────────────────────────────────────────────────
+  if (!activeJudgeId) {
+    const loginRole = preselectedRole || selectedRole;
+    const loginOption = loginOptions.find(o => o.value === loginRole);
+    const loginRoleLabel = loginOption?.label ?? loginRole ?? 'Judge';
+    const showPinEntry = !!loginRole;
+
+    const handleLogin = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!loginRole || !pin) return;
+      verifyMutation.mutate(
+        { data: { tournament_id: activeTournamentId, pin } },
+        {
+          onSuccess: (data) => {
+            setJudgeSession(data.id, loginRole, data.name);
+            setPin('');
+          },
+          onError: () => toast({ title: 'Invalid PIN', variant: 'destructive' }),
+        }
+      );
+    };
+
+    return (
+      <div className="min-h-[100dvh] flex items-center justify-center p-4 bg-background">
+        <Card className="w-full max-w-sm p-8 border-primary/20 shadow-2xl">
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
+              <ShieldAlert className="w-8 h-8 text-primary" />
+            </div>
+            {showPinEntry ? (
+              <>
+                <h2 className="text-2xl font-bold font-display">{loginRoleLabel} Station</h2>
+                <p className="text-muted-foreground mt-2 text-sm">Enter your judge PIN to begin.</p>
+              </>
+            ) : (
+              <>
+                <h2 className="text-2xl font-bold font-display">Judge Login</h2>
+                <p className="text-muted-foreground mt-2 text-sm">
+                  Select your position, then enter your PIN. Or scan the QR code at your station.
+                </p>
+              </>
+            )}
+          </div>
+
+          {!showPinEntry ? (
+            <div className="space-y-6">
+              <Select
+                label="I am judging as…"
+                value={selectedRole}
+                onChange={e => setSelectedRole(e.target.value)}
+                options={[
+                  { label: '— Select position —', value: '' },
+                  ...loginOptions
+                ]}
+              />
+              <Button variant="primary" className="w-full h-12 text-lg" disabled={!selectedRole}
+                onClick={() => {}}>
+                Continue →
+              </Button>
+            </div>
+          ) : (
+            <form onSubmit={handleLogin} className="space-y-5" autoComplete="off">
+              {!preselectedRole && (
+                <div className="text-center">
+                  <Badge variant="outline" className="font-semibold text-sm px-3 py-1">{loginRoleLabel}</Badge>
+                </div>
+              )}
+              <Input
+                type="password"
+                inputMode="numeric"
+                maxLength={6}
+                autoFocus
+                autoComplete="new-password"
+                name="judge-pin-field"
+                className="text-center text-4xl tracking-widest h-16 font-mono"
+                placeholder="••••"
+                value={pin}
+                onChange={e => setPin(e.target.value)}
+              />
+              <Button variant="primary" type="submit" className="w-full h-12 text-lg"
+                isLoading={verifyMutation.isPending}>
+                Login
+              </Button>
+              {!preselectedRole && (
+                <button type="button"
+                  className="w-full text-center text-sm text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => setSelectedRole('')}>
+                  ← Change position
+                </button>
+              )}
+            </form>
+          )}
+        </Card>
+      </div>
+    );
+  }
+
+  // ── Chief Judge: review / correction page ────────────────────────────────────
+  if (activeJudgeRole === 'chief_judge') {
+    return (
+      <ChiefJudgeView
+        tournamentId={activeTournamentId}
+        judgeCount={judgeCount}
+        activeJudgeName={activeJudgeName}
+      />
+    );
+  }
+
+  // ── Scoring judge (A–E): score pad ───────────────────────────────────────────
+  const isController = activeJudgeRole === 'judge_a' || (judgeCount === 1 && activeJudgeRole === 'judge_a');
+  const stationInfo = panel.find(s => s.role === activeJudgeRole);
+
+  const handleScore = (scoreStr: string) => {
+    if (!activePass || !activeJudgeName || !activeJudgeRole) return;
+    setSubmittedScore(scoreStr);
+    submitMutation.mutate({
+      id: activePass.id,
+      data: {
+        tournament_id: activeTournamentId,
+        judge_id: activeJudgeId,
+        judge_name: activeJudgeName,
+        judge_role: activeJudgeRole,
+        pass_score: scoreStr,
+      }
+    });
+  };
+
+  const ropeColour = activePass ? getRopeColour(activePass.rope_length) : null;
+
+  return (
+    <div className="flex flex-col min-h-[100dvh] pb-16 bg-background">
+      {/* ── Pass header ── */}
+      {activePass ? (
+        <div className="bg-emerald-950 text-white px-4 pt-4 pb-3 sticky top-0 z-10 shadow-lg">
+          <div className="flex items-start justify-between gap-3 max-w-2xl mx-auto">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded-full border border-emerald-400/20 animate-pulse">
+                  ● LIVE PASS
+                </span>
+              </div>
+              <h1 className="text-2xl sm:text-3xl font-black font-display leading-tight truncate">
+                {activePass.skier_name}
+              </h1>
+              <div className="flex flex-wrap items-center gap-2 mt-1 text-sm text-emerald-200/80 font-semibold">
+                <span>{activePass.speed_kph}kph</span>
+                <span>·</span>
+                {ropeColour && (
+                  <span className="px-2 py-0.5 rounded-full text-xs font-bold border-2 leading-tight"
+                    style={{ background: ropeColour.bg, color: ropeColour.text, borderColor: ropeColour.border }}>
+                    {formatRope(activePass.rope_length)}
+                  </span>
+                )}
+                <span>·</span>
+                <span>Rnd {activePass.round_number}</span>
+              </div>
+            </div>
+            <button onClick={() => refetchPasses()}
+              className="p-2 text-emerald-400/70 hover:text-emerald-300 transition-colors rounded-lg flex-shrink-0 mt-1">
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-card border-b px-4 py-3 sticky top-0 z-10">
+          <div className="flex items-center justify-between max-w-2xl mx-auto">
+            <p className="font-bold text-muted-foreground text-sm">Waiting for skier…</p>
+            <button onClick={() => refetchPasses()}
+              className="p-2 text-muted-foreground hover:text-foreground transition-colors rounded-lg">
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 px-3 py-3 max-w-2xl w-full mx-auto space-y-3">
         {activePass ? (
           <>
@@ -447,7 +748,7 @@ export default function Judging() {
               </div>
             )}
             <ScorePad onScore={handleScore} submittedScore={submittedScore} disabled={submitMutation.isPending} />
-            {isJudgeA && (
+            {isController && (
               <Card className="overflow-hidden border-primary/20">
                 <button onClick={() => setJudgeAOpen(v => !v)}
                   className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/40 transition-colors">
@@ -465,7 +766,7 @@ export default function Judging() {
             )}
           </>
         ) : (
-          isJudgeA ? (
+          isController ? (
             <Card className="overflow-hidden border-primary/20">
               <button onClick={() => setJudgeAOpen(v => !v)}
                 className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/40 transition-colors">
@@ -494,7 +795,7 @@ export default function Judging() {
         )}
       </div>
 
-      {/* ── Fixed bottom identity bar ───────────────────────────────────── */}
+      {/* ── Fixed bottom identity bar ── */}
       <div className="fixed bottom-0 inset-x-0 bg-card/95 backdrop-blur border-t px-4 py-3 z-20 shadow-2xl">
         <div className="flex items-center justify-between max-w-2xl mx-auto">
           <div className="flex items-center gap-3">
@@ -504,7 +805,7 @@ export default function Judging() {
             <div className="min-w-0">
               <p className="font-bold text-sm leading-tight truncate">{activeJudgeName}</p>
               <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">
-                {roleLabel(activeJudgeRole)}
+                {stationInfo?.label ?? activeJudgeRole ?? 'Judge'}
               </p>
             </div>
           </div>

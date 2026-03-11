@@ -16,7 +16,7 @@ Digital scorecard for professional slalom waterski tournaments. A clone of slalo
   - Tournament management (create/edit/delete, G/L/R/E class)
   - Skier roster management with divisions and PINs
   - Pass recording (rope length, speed, round)
-  - Multi-judge scoring with IWWF collation (1, 3, or 5 judges)
+  - Multi-judge scoring with IWWF collation (1, 3, or 5 judges). Panel driven by tournament's `judge_count`: 1-judge (A is chief+boat), 3-judge (C is boat), 5-judge (E is boat). Only scoring-panel roles (judge_a–judge_e) count toward collation; chief_judge is oversight/correction only
   - Judge PIN authentication
   - Live spectator scoreboard (auto-refresh every 5s)
   - Admin panel (PIN-protected)
