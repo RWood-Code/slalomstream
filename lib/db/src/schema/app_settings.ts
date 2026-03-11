@@ -11,6 +11,8 @@ export const appSettingsTable = pgTable("app_settings", {
   surepath_observer_pin: text("surepath_observer_pin"),
   surepath_enabled: boolean("surepath_enabled").notNull().default(false),
   active_tournament_id: integer("active_tournament_id"),
+  connection_mode: text("connection_mode").notNull().default("local"),
+  public_url: text("public_url"),
 });
 
 export type AppSettings = typeof appSettingsTable.$inferSelect;

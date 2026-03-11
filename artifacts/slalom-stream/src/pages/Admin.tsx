@@ -5,7 +5,7 @@ import { Card, Button, PageHeader, Input, Select, Badge } from '@/components/ui/
 import {
   Settings, Shield, UserPlus, Radio, CheckCircle2, XCircle, Copy, RefreshCw,
   Trash2, Key, Waves, Plug, PlugZap, Download, Globe, AlertCircle,
-  ChevronDown, ChevronUp, Eye, EyeOff, Wand2, ShieldCheck,
+  ChevronDown, ChevronUp, Eye, EyeOff, Wand2, ShieldCheck, Wifi,
 } from 'lucide-react';
 import { useQueryClient, useQuery, useMutation } from '@tanstack/react-query';
 import { DIVISIONS, JUDGE_ROLES } from '@/lib/utils';
@@ -122,6 +122,7 @@ export default function Admin() {
       {/* Global settings */}
       <div className="space-y-2">
         <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground px-1 pt-2">System Settings</p>
+        <ConnectionModePanel />
         <AppSettingsPanel />
         <SurePathPanel />
         <OfficialsPinsPanel />
@@ -141,6 +142,134 @@ export default function Admin() {
         </div>
       )}
     </div>
+  );
+}
+
+// ─── Connection Mode ───────────────────────────────────────────────────────────
+function ConnectionModePanel() {
+  const { toast } = useToast();
+
+  const { data: settings, refetch } = useQuery({
+    queryKey: ['app-settings'],
+    queryFn: async () => { const res = await fetch('/api/settings'); return res.json(); },
+  });
+  const { data: network } = useQuery({
+    queryKey: ['network-info'],
+    queryFn: async () => { const r = await fetch('/api/network-info'); return r.json(); },
+    refetchInterval: 30000,
+    staleTime: 15000,
+  });
+
+  const [mode, setMode] = useState<'local' | 'cloud'>('local');
+  const [publicUrl, setPublicUrl] = useState('');
+
+  useEffect(() => {
+    if (settings) {
+      setMode(settings.connection_mode ?? 'local');
+      setPublicUrl(settings.public_url ?? '');
+    }
+  }, [settings]);
+
+  const saveMutation = useMutation({
+    mutationFn: async (body: Record<string, unknown>) => {
+      const res = await fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      return res.json();
+    },
+    onSuccess: () => { toast({ title: 'Connection mode saved' }); refetch(); },
+  });
+
+  const save = (newMode: 'local' | 'cloud', url?: string) =>
+    saveMutation.mutate({ connection_mode: newMode, public_url: url ?? publicUrl ?? null });
+
+  const badge = mode === 'cloud'
+    ? <Badge variant="success" className="text-xs flex items-center gap-1"><Globe className="w-2.5 h-2.5" /> Cloud</Badge>
+    : <Badge variant="outline" className="text-xs flex items-center gap-1"><Wifi className="w-2.5 h-2.5" /> Local WiFi</Badge>;
+
+  return (
+    <AdminSection
+      icon={<Wifi className="w-4 h-4" />}
+      title="Connection Mode"
+      subtitle="How judge devices connect to this server"
+      badge={badge}
+    >
+      <div className="p-5 space-y-4">
+        {/* Mode picker */}
+        <div className="grid sm:grid-cols-2 gap-3">
+          <button
+            onClick={() => { setMode('local'); save('local'); }}
+            className={`p-4 rounded-xl border-2 text-left transition-all ${mode === 'local' ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/40'}`}
+          >
+            <div className="flex items-center gap-2 mb-1.5">
+              <Wifi className="w-4 h-4 text-primary" />
+              <p className="font-bold text-sm">Local WiFi</p>
+              {mode === 'local' && <CheckCircle2 className="w-4 h-4 text-primary ml-auto" />}
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Server runs on a laptop at the venue. All judge devices must join the same WiFi network. No internet required — works anywhere.
+            </p>
+          </button>
+          <button
+            onClick={() => setMode('cloud')}
+            className={`p-4 rounded-xl border-2 text-left transition-all ${mode === 'cloud' ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/40'}`}
+          >
+            <div className="flex items-center gap-2 mb-1.5">
+              <Globe className="w-4 h-4 text-primary" />
+              <p className="font-bold text-sm">Cloud / Online</p>
+              {mode === 'cloud' && <CheckCircle2 className="w-4 h-4 text-primary ml-auto" />}
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Server is deployed to the internet. Judges can connect from <strong>any network</strong> — mobile data, hotel WiFi, etc. Requires internet on every device.
+            </p>
+          </button>
+        </div>
+
+        {/* Local: show detected IPs */}
+        {mode === 'local' && network?.urls?.length > 0 && (
+          <div className="p-3 bg-muted/50 rounded-xl border space-y-2">
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Detected Local Addresses</p>
+            {network.urls.map((url: string, i: number) => (
+              <div key={i} className="flex items-center gap-2">
+                <code className="flex-1 text-xs font-mono bg-background px-2 py-1 rounded border">{url}</code>
+                <button
+                  onClick={() => { navigator.clipboard.writeText(url); toast({ title: 'Copied' }); }}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+            <p className="text-xs text-muted-foreground">QR codes on the Recording page point to this address. All devices must be on the same WiFi.</p>
+          </div>
+        )}
+
+        {/* Cloud: public URL field */}
+        {mode === 'cloud' && (
+          <div className="space-y-3">
+            <div className="flex gap-3 items-end">
+              <Input
+                label="Public URL"
+                placeholder="https://your-app.replit.app"
+                value={publicUrl}
+                onChange={e => setPublicUrl(e.target.value)}
+                className="h-10 font-mono text-xs"
+              />
+              <Button
+                variant="primary"
+                className="h-10 px-5 shrink-0"
+                isLoading={saveMutation.isPending}
+                onClick={() => save('cloud')}
+              >
+                Save
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 rounded-lg p-3">
+              Enter the full public URL where this app is deployed (e.g. your Replit deployment URL).
+              QR codes on the Recording page will use this address so judges can connect from any network without needing to be on the same WiFi.
+            </p>
+          </div>
+        )}
+      </div>
+    </AdminSection>
   );
 }
 

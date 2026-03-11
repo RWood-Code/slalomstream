@@ -29,6 +29,8 @@ router.put("/", async (req, res) => {
     surepath_event_sub_id,
     surepath_observer_pin,
     active_tournament_id,
+    connection_mode,
+    public_url,
   } = req.body;
 
   await getOrCreateSettings();
@@ -45,6 +47,8 @@ router.put("/", async (req, res) => {
       surepath_event_sub_id: surepath_event_sub_id ?? null,
       surepath_observer_pin: surepath_observer_pin ?? null,
       active_tournament_id: active_tournament_id ?? null,
+      connection_mode: connection_mode ?? "local",
+      public_url: public_url ?? null,
     })
     .where(eq(appSettingsTable.id, 1))
     .returning();

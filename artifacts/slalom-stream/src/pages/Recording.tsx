@@ -26,6 +26,15 @@ function useNetworkInfo() {
   });
 }
 
+interface AppSettings { connection_mode: string; public_url: string | null; [key: string]: unknown }
+function useAppSettings() {
+  return useQuery<AppSettings>({
+    queryKey: ['app-settings'],
+    queryFn: async () => { const r = await fetch('/api/settings'); return r.json(); },
+    staleTime: 30000,
+  });
+}
+
 // ─── Judge score overlay data ──────────────────────────────────────────────────
 function usePassJudgeScores(passId: number | null) {
   return useQuery<any[]>({
@@ -362,6 +371,7 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
 function JudgeConnectPanel({ tournament }: { tournament: any }) {
   const [open, setOpen] = useState(false);
   const { data: network } = useNetworkInfo();
+  const { data: appSettings } = useAppSettings();
 
   const judgeCount = tournament?.judge_count ?? 1;
   const panel = getJudgingPanel(judgeCount);
@@ -372,7 +382,10 @@ function JudgeConnectPanel({ tournament }: { tournament: any }) {
     ...(judgeCount > 1 ? [{ role: 'chief_judge', label: 'Chief Judge' }] : []),
   ];
 
+  const isCloud = appSettings?.connection_mode === 'cloud' && !!appSettings?.public_url;
+
   const getBase = () => {
+    if (isCloud) return (appSettings!.public_url as string).replace(/\/$/, '');
     if (network?.urls?.[0]) {
       const host = network.urls[0].split('//')[1]?.split(':')[0];
       const port = window.location.port || network.port;
@@ -432,12 +445,17 @@ function JudgeConnectPanel({ tournament }: { tournament: any }) {
               );
             })}
           </div>
-          {network?.urls?.[0] && (
-            <p className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3">
-              <strong>Setup:</strong> Connect all judge devices to the same WiFi network ({network.urls[0]}).
-              Judges scan their station QR and enter their personal PIN. No setup needed per tournament.
+          {isCloud ? (
+            <p className="text-xs text-muted-foreground bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
+              <strong>Cloud mode:</strong> Judges can scan from any network — mobile data or any WiFi.
+              All QR codes point to <code className="font-mono text-xs">{appSettings?.public_url}</code>.
             </p>
-          )}
+          ) : network?.urls?.[0] ? (
+            <p className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3">
+              <strong>Local WiFi mode:</strong> All judge devices must connect to the same WiFi network as this server.
+              QR codes point to <code className="font-mono text-xs">{network.urls[0]}</code>.
+            </p>
+          ) : null}
         </div>
       )}
     </Card>
