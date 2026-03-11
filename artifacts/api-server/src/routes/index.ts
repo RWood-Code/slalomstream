@@ -8,6 +8,7 @@ import judgesTournamentRouter, { judgeRouter } from "./judges";
 import settingsRouter, { adminRouter } from "./settings";
 import networkRouter from "./network";
 import waterskiconnectRouter from "./waterskiconnect";
+import officialsRouter from "./officials";
 
 const router = Router();
 
@@ -25,5 +26,6 @@ router.use("/tournaments/:id/judges", judgesTournamentRouter);
 router.use("/judges", judgeRouter);
 router.use("/settings", settingsRouter);
 router.use("/admin", adminRouter);
+router.use("/officials", officialsRouter);
 
 export default router;

@@ -10,6 +10,7 @@ import Judging from "@/pages/Judging";
 import Scoreboard from "@/pages/Scoreboard";
 import Admin from "@/pages/Admin";
 import Help from "@/pages/Help";
+import Officials from "@/pages/Officials";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient({
@@ -29,6 +30,7 @@ function Router() {
         <Route path="/recording" component={Recording} />
         <Route path="/judging" component={Judging} />
         <Route path="/scoreboard" component={Scoreboard} />
+        <Route path="/officials" component={Officials} />
         <Route path="/admin" component={Admin} />
         <Route path="/help" component={Help} />
         <Route component={NotFound} />

@@ -21,8 +21,12 @@ Digital scorecard for professional slalom waterski tournaments. A clone of slalo
   - Live spectator scoreboard (auto-refresh every 5s)
   - Admin panel (PIN-protected)
   - Offline-capable (state stored in localStorage via Zustand persist)
-- **Pages**: Home, Recording, Judging, Scoreboard, Admin
+- **Pages**: Home, Recording, Judging, Scoreboard, Officials, Admin, Help
 - **Colors**: Emerald green theme
+- **NZTWSA Officials Register**: 135 officials seeded from NZTWSA register (13 Feb 2026), filterable by region/grade/financial status
+- **SurePath integration**: WaterskiConnect WebSocket client (`services/surepath-client.ts`) auto-connects when enabled; creates passes on speed trigger; configurable Event Name, Sub ID, Observer PIN, WS URL
+- **WaterskiConnect webhook**: `POST /api/waterskiconnect/inbound` for manual scoring software push; status at `GET /api/waterskiconnect/status`
+- **Test data**: test tournament with 8 skiers, 3 judges (PINs 1111/2222/3333), 6 scored passes. Run `pnpm --filter @workspace/db run seed:test` to re-seed
 
 ## Stack
 

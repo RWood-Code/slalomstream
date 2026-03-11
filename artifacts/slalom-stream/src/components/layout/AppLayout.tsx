@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link, useLocation } from 'wouter';
 import { cn } from '@/lib/utils';
-import { Trophy, Video, FileCheck, Activity, Settings, LogOut, Waves, HelpCircle } from 'lucide-react';
+import { Trophy, Video, FileCheck, Activity, Settings, LogOut, Waves, HelpCircle, Users } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
 import { useGetTournament } from '@workspace/api-client-react';
 
@@ -18,6 +18,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     { href: '/recording', label: 'Record', icon: Video, requiresTourney: true },
     { href: '/judging', label: 'Judge', icon: FileCheck, requiresTourney: true },
     { href: '/scoreboard', label: 'Live', icon: Activity, requiresTourney: true },
+    { href: '/officials', label: 'Officials', icon: Users },
     { href: '/admin', label: 'Admin', icon: Settings },
     { href: '/help', label: 'Help', icon: HelpCircle },
   ];
