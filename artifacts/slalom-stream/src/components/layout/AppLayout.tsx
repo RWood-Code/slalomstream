@@ -8,6 +8,7 @@ import { useGetTournament } from '@workspace/api-client-react';
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const { activeTournamentId, logout } = useAppStore();
+  const liteMode = localStorage.getItem('slalom_lite_mode') === 'true';
   
   const { data: tournament } = useGetTournament(activeTournamentId || 0, {
     query: { enabled: !!activeTournamentId }
@@ -16,7 +17,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const navItems = [
     { href: '/', label: 'Home', icon: Trophy },
     { href: '/recording', label: 'Record', icon: Video, requiresTourney: true },
-    { href: '/judging', label: 'Judge', icon: FileCheck, requiresTourney: true },
+    // Judge nav hidden in lite mode — scores are entered on the Recording screen
+    ...(!liteMode ? [{ href: '/judging', label: 'Judge', icon: FileCheck, requiresTourney: true }] : []),
     { href: '/scoreboard', label: 'Live', icon: Activity, requiresTourney: true },
     { href: '/officials', label: 'Officials', icon: Users },
     { href: '/admin', label: 'Admin', icon: Settings },

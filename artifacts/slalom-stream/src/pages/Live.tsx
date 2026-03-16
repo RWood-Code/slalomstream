@@ -89,6 +89,15 @@ export default function Live() {
     return () => navigator.mediaDevices?.removeEventListener?.('devicechange', refreshDevices);
   }, [refreshDevices]);
 
+  // Auto-start camera on mount if a device was previously selected (permission already granted)
+  useEffect(() => {
+    const saved = localStorage.getItem(LS_DEVICE_KEY);
+    if (saved) {
+      startCamera(saved);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const startCamera = useCallback(async (deviceId?: string) => {
     setError(null);
     const target = deviceId ?? selectedDeviceId;
