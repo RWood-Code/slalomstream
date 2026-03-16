@@ -11,6 +11,7 @@ import Scoreboard from "@/pages/Scoreboard";
 import Admin from "@/pages/Admin";
 import Help from "@/pages/Help";
 import Officials from "@/pages/Officials";
+import Live from "@/pages/Live";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient({
@@ -24,18 +25,26 @@ const queryClient = new QueryClient({
 
 function Router() {
   return (
-    <AppLayout>
-      <Switch>
-        <Route path="/" component={Home} />
-        <Route path="/recording" component={Recording} />
-        <Route path="/judging" component={Judging} />
-        <Route path="/scoreboard" component={Scoreboard} />
-        <Route path="/officials" component={Officials} />
-        <Route path="/admin" component={Admin} />
-        <Route path="/help" component={Help} />
-        <Route component={NotFound} />
-      </Switch>
-    </AppLayout>
+    <Switch>
+      {/* Fullscreen live view — no nav, no layout wrapper */}
+      <Route path="/live" component={Live} />
+
+      {/* All other routes inside AppLayout */}
+      <Route>
+        <AppLayout>
+          <Switch>
+            <Route path="/" component={Home} />
+            <Route path="/recording" component={Recording} />
+            <Route path="/judging" component={Judging} />
+            <Route path="/scoreboard" component={Scoreboard} />
+            <Route path="/officials" component={Officials} />
+            <Route path="/admin" component={Admin} />
+            <Route path="/help" component={Help} />
+            <Route component={NotFound} />
+          </Switch>
+        </AppLayout>
+      </Route>
+    </Switch>
   );
 }
 

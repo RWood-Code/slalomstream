@@ -8,12 +8,17 @@ import { Card, Button, Badge, PageHeader, Select, Input } from '@/components/ui/
 import {
   Play, SquareSquare, Timer, User, Wifi, ChevronDown, ChevronUp,
   Camera, CameraOff, Circle, Square, Maximize2, RefreshCw,
-  Gauge, MonitorPlay, CheckCircle2, Download, ExternalLink, SwitchCamera
+  CheckCircle2, Download, ExternalLink, SwitchCamera,
+  X, Monitor, Gauge, MonitorPlay
 } from 'lucide-react';
-import { ROPE_LENGTHS, SPEEDS, formatRope, formatSpeed, getRopeColour, getJudgingPanel } from '@/lib/utils';
+import { ROPE_LENGTHS, SPEEDS, VALID_IWWF_SCORES, formatRope, formatSpeed, getRopeColour, getJudgingPanel } from '@/lib/utils';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { QRCodeSVG } from 'qrcode.react';
+
+const LS_DEVICE_KEY = 'slalom_camera_device_id';
+const LS_LITE_MODE  = 'slalom_lite_mode';
+const LS_ASK_SAVE  = 'slalom_ask_save_location';
 
 // ─── Network info ─────────────────────────────────────────────────────────────
 interface NetworkInfo { addresses: { name: string; address: string; family: string }[]; port: string; urls: string[] }
@@ -50,23 +55,27 @@ function usePassJudgeScores(passId: number | null) {
 }
 
 // ─── Video hook ────────────────────────────────────────────────────────────────
-type VideoMode = 'idle' | 'preview' | 'recording' | 'replay';
+type VideoMode = 'idle' | 'preview' | 'recording';
 
 export interface VideoDevice { deviceId: string; label: string; }
 
 function useVideoRecorder() {
   const [mode, setMode] = useState<VideoMode>('idle');
   const [replayUrl, setReplayUrl] = useState<string | null>(null);
-  const [playbackRate, setPlaybackRate] = useState(1);
+  const [showReplay, setShowReplay] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pipActive, setPipActive] = useState(false);
   const [devices, setDevices] = useState<VideoDevice[]>([]);
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>(
+    () => localStorage.getItem(LS_DEVICE_KEY) ?? ''
+  );
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const blobRef = useRef<Blob | null>(null);
+  const prevUrlRef = useRef<string | null>(null);
 
   // Enumerate video input devices — labels only available after permission
   const refreshDevices = useCallback(async () => {
@@ -74,57 +83,46 @@ function useVideoRecorder() {
       const all = await navigator.mediaDevices.enumerateDevices();
       const cams = all
         .filter(d => d.kind === 'videoinput')
-        .map((d, i) => ({
-          deviceId: d.deviceId,
-          label: d.label || `Camera ${i + 1}`,
-        }));
+        .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` }));
       setDevices(cams);
-      // Auto-select first device if nothing selected yet
       setSelectedDeviceId(prev => {
-        if (prev) return prev;
+        const stored = localStorage.getItem(LS_DEVICE_KEY);
+        if (stored && cams.find(c => c.deviceId === stored)) return stored;
+        if (prev && cams.find(c => c.deviceId === prev)) return prev;
         return cams[0]?.deviceId ?? '';
       });
-    } catch {
-      // enumerateDevices not supported — silently ignore
-    }
+    } catch {}
   }, []);
 
-  // Enumerate on mount (may get empty labels before permission granted)
   useEffect(() => {
     refreshDevices();
     navigator.mediaDevices?.addEventListener?.('devicechange', refreshDevices);
-    return () => {
-      navigator.mediaDevices?.removeEventListener?.('devicechange', refreshDevices);
-    };
+    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', refreshDevices);
   }, [refreshDevices]);
 
   const startCamera = useCallback(async (deviceId?: string) => {
     setError(null);
     const targetDevice = deviceId ?? selectedDeviceId;
     try {
-      // Stop any existing stream first
       streamRef.current?.getTracks().forEach(t => t.stop());
       streamRef.current = null;
 
       const videoConstraints: MediaTrackConstraints = {
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-        frameRate: { ideal: 60 },
+        width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 },
       };
       if (targetDevice) videoConstraints.deviceId = { exact: targetDevice };
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: videoConstraints,
-        audio: false,
-      });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.muted = true;
         videoRef.current.play().catch(() => {});
       }
-      if (targetDevice) setSelectedDeviceId(targetDevice);
-      // Re-enumerate now that we have permission — labels will be populated
+      if (targetDevice) {
+        setSelectedDeviceId(targetDevice);
+        localStorage.setItem(LS_DEVICE_KEY, targetDevice);
+      }
       await refreshDevices();
       setMode('preview');
     } catch (err: any) {
@@ -135,16 +133,12 @@ function useVideoRecorder() {
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
+    if (videoRef.current) videoRef.current.srcObject = null;
     setMode('idle');
   }, []);
 
   const startRecording = useCallback(() => {
     if (!streamRef.current || mode === 'recording') return;
-    if (replayUrl) URL.revokeObjectURL(replayUrl);
-    setReplayUrl(null);
     chunksRef.current = [];
 
     const mimeType =
@@ -157,19 +151,15 @@ function useVideoRecorder() {
       recorder.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       recorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: mimeType });
+        blobRef.current = blob;
+        // Revoke previous replay URL
+        if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current);
         const url = URL.createObjectURL(blob);
+        prevUrlRef.current = url;
         setReplayUrl(url);
-        setPlaybackRate(1);
-        // Switch video to replay
-        if (videoRef.current) {
-          videoRef.current.srcObject = null;
-          videoRef.current.src = url;
-          videoRef.current.muted = false;
-          videoRef.current.loop = false;
-          videoRef.current.playbackRate = 1;
-          videoRef.current.play().catch(() => {});
-        }
-        setMode('replay');
+        setShowReplay(true);
+        // Stay on live preview — main video never switches to replay
+        setMode(streamRef.current ? 'preview' : 'idle');
       };
       recorder.start(100);
       recorderRef.current = recorder;
@@ -177,27 +167,48 @@ function useVideoRecorder() {
     } catch (err: any) {
       setError(`Recording not supported: ${err.message}`);
     }
-  }, [mode, replayUrl]);
+  }, [mode]);
 
   const stopRecording = useCallback(() => {
     recorderRef.current?.stop();
     recorderRef.current = null;
   }, []);
 
-  const backToPreview = useCallback(() => {
-    if (videoRef.current) {
-      videoRef.current.src = '';
-      videoRef.current.srcObject = streamRef.current;
-      videoRef.current.muted = true;
-      videoRef.current.loop = false;
-      videoRef.current.play().catch(() => {});
-    }
-    setMode(streamRef.current ? 'preview' : 'idle');
-  }, []);
+  const dismissReplay = useCallback(() => setShowReplay(false), []);
 
-  const setSpeed = useCallback((rate: number) => {
-    setPlaybackRate(rate);
-    if (videoRef.current) videoRef.current.playbackRate = rate;
+  // Save with File System Access API if available, otherwise standard download
+  const saveRecording = useCallback(async (skierName?: string) => {
+    if (!blobRef.current) return;
+    const filename = skierName
+      ? `${skierName.replace(/\s+/g, '-')}-${Date.now()}.webm`
+      : `slalom-${Date.now()}.webm`;
+
+    const askForLocation = localStorage.getItem(LS_ASK_SAVE) === 'true';
+    const fsa = (window as any).showSaveFilePicker;
+
+    if (askForLocation && fsa) {
+      try {
+        const handle = await fsa({
+          suggestedName: filename,
+          types: [{ description: 'WebM Video', accept: { 'video/webm': ['.webm'] } }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blobRef.current);
+        await writable.close();
+        return;
+      } catch (e: any) {
+        if (e.name === 'AbortError') return; // user cancelled picker
+        // fall through to download link
+      }
+    }
+
+    // Standard download fallback
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blobRef.current);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   }, []);
 
   const togglePiP = useCallback(async () => {
@@ -215,7 +226,6 @@ function useVideoRecorder() {
     }
   }, []);
 
-  // PiP lifecycle
   useEffect(() => {
     const vid = videoRef.current;
     if (!vid) return;
@@ -229,30 +239,16 @@ function useVideoRecorder() {
     };
   }, []);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      streamRef.current?.getTracks().forEach(t => t.stop());
-      if (replayUrl) URL.revokeObjectURL(replayUrl);
-    };
+  useEffect(() => () => {
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current);
   }, []);
 
-  const downloadRecording = useCallback((skierName?: string) => {
-    if (!replayUrl) return;
-    const name = skierName ? `${skierName.replace(/\s+/g, '-')}-` : '';
-    const a = document.createElement('a');
-    a.href = replayUrl;
-    a.download = `slalom-${name}${Date.now()}.webm`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }, [replayUrl]);
-
   return {
-    videoRef, mode, replayUrl, playbackRate, error, pipActive,
+    videoRef, mode, replayUrl, showReplay, error, pipActive,
     devices, selectedDeviceId, setSelectedDeviceId,
-    startCamera, stopCamera, startRecording, stopRecording, backToPreview,
-    setSpeed, togglePiP, downloadRecording,
+    startCamera, stopCamera, startRecording, stopRecording,
+    dismissReplay, saveRecording, togglePiP,
   };
 }
 
@@ -265,7 +261,7 @@ interface VideoPanelProps {
 
 function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
   const { data: scores } = usePassJudgeScores(activePassId);
-  const { mode, videoRef, error, pipActive, playbackRate } = video;
+  const { mode, videoRef, error, pipActive } = video;
 
   const ROLE_SHORT: Record<string, string> = {
     judge_a: 'A', judge_b: 'B', judge_c: 'C', judge_d: 'D', judge_e: 'E', chief_judge: 'CJ',
@@ -289,7 +285,6 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
           <Camera className="w-14 h-14 text-slate-500" />
           <p className="text-slate-400 text-sm font-medium">Camera offline</p>
 
-          {/* Device picker */}
           {video.devices.length > 1 && (
             <div className="w-full max-w-xs">
               <select
@@ -304,11 +299,7 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
             </div>
           )}
 
-          <Button
-            variant="primary"
-            onClick={() => video.startCamera()}
-            className="flex items-center gap-2"
-          >
+          <Button variant="primary" onClick={() => video.startCamera()} className="flex items-center gap-2">
             <Camera className="w-4 h-4" /> Enable Camera
           </Button>
           {error && (
@@ -318,8 +309,7 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
                 <div className="bg-amber-900/40 border border-amber-700/50 rounded-lg px-3 py-2 space-y-1">
                   <p className="text-amber-300 text-xs font-semibold">Camera tip</p>
                   <p className="text-amber-200/80 text-[11px] leading-tight">
-                    Camera may be blocked if viewing inside a browser preview pane.
-                    Open the app in a full browser tab to allow camera access.
+                    Camera may be blocked if viewing inside a browser preview pane. Open the app in a full browser tab to allow camera access.
                   </p>
                   <button
                     onClick={() => window.open(window.location.href, '_blank')}
@@ -334,7 +324,7 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
         </div>
       )}
 
-      {/* Overlays when camera/replay active */}
+      {/* Overlays when camera active */}
       {mode !== 'idle' && (
         <>
           {/* Status badge — top left */}
@@ -349,16 +339,10 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
                 LIVE
               </span>
             )}
-            {mode === 'replay' && (
-              <span className="flex items-center gap-1.5 bg-blue-600/90 backdrop-blur text-white text-xs font-bold px-2.5 py-1 rounded-full">
-                <MonitorPlay className="w-3 h-3" /> REPLAY
-                {playbackRate !== 1 && ` · ${playbackRate}×`}
-              </span>
-            )}
           </div>
 
           {/* Skier name — top right (during recording) */}
-          {(mode === 'recording' || mode === 'replay') && activePassName && (
+          {mode === 'recording' && activePassName && (
             <div className="absolute top-3 right-3 bg-black/70 backdrop-blur text-white text-xs font-bold px-3 py-1 rounded-full">
               {activePassName}
             </div>
@@ -370,7 +354,7 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
               {scores.map((s: any) => (
                 <div key={s.id} className="flex items-center gap-2 bg-black/75 backdrop-blur text-white text-sm font-bold px-2.5 py-1 rounded-lg">
                   <span className="text-emerald-400 text-xs font-semibold w-5">{ROLE_SHORT[s.judge_role] ?? 'J'}</span>
-                  <span>{s.pass_score}</span>
+                  <span>{s.pass_score === '6_no_gates' ? '6 NG' : s.pass_score}</span>
                   <CheckCircle2 className="w-3 h-3 text-emerald-400" />
                 </div>
               ))}
@@ -380,17 +364,10 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
           {/* Controls bar — bottom */}
           <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/80 to-transparent px-3 py-2 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              {(mode === 'preview' || mode === 'recording') && (
-                <button
-                  onClick={video.stopCamera}
-                  className="text-white/70 hover:text-white transition-colors p-1"
-                  title="Stop camera"
-                >
-                  <CameraOff className="w-4 h-4" />
-                </button>
-              )}
-              {/* Camera switcher — shown when live/recording and multiple devices available */}
-              {(mode === 'preview' || mode === 'recording') && video.devices.length > 1 && (
+              <button onClick={video.stopCamera} className="text-white/70 hover:text-white transition-colors p-1" title="Stop camera">
+                <CameraOff className="w-4 h-4" />
+              </button>
+              {video.devices.length > 1 && (
                 <div className="flex items-center gap-1">
                   <SwitchCamera className="w-3.5 h-3.5 text-white/50 shrink-0" />
                   <select
@@ -406,28 +383,8 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
                   </select>
                 </div>
               )}
-              {mode === 'replay' && (
-                <>
-                  <button onClick={video.backToPreview} className="text-white/70 hover:text-white p-1" title="Back to live">
-                    <Camera className="w-4 h-4" />
-                  </button>
-                  <div className="flex items-center gap-1 bg-white/10 rounded-lg px-2 py-1">
-                    <Gauge className="w-3.5 h-3.5 text-white/60" />
-                    {[0.25, 0.5, 1].map(r => (
-                      <button
-                        key={r}
-                        onClick={() => video.setSpeed(r)}
-                        className={`text-xs font-bold px-1.5 py-0.5 rounded transition-colors ${playbackRate === r ? 'text-emerald-400' : 'text-white/60 hover:text-white'}`}
-                      >
-                        {r === 1 ? '1×' : `${r}×`}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
             </div>
             <div className="flex items-center gap-2">
-              {/* PiP */}
               {'pictureInPictureEnabled' in document && (
                 <button
                   onClick={video.togglePiP}
@@ -445,12 +402,256 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
   );
 }
 
+// ─── Replay Slide Panel ────────────────────────────────────────────────────────
+interface ReplaySlidePanelProps {
+  replayUrl: string | null;
+  open: boolean;
+  onClose: () => void;
+  onSave: () => void;
+  skierName?: string | null;
+}
+
+function ReplaySlidePanel({ replayUrl, open, onClose, onSave, skierName }: ReplaySlidePanelProps) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [rate, setRate] = useState(1);
+  const [playing, setPlaying] = useState(true);
+
+  // When opened or URL changes, load the replay
+  useEffect(() => {
+    if (!open || !replayUrl || !videoRef.current) return;
+    videoRef.current.src = replayUrl;
+    videoRef.current.playbackRate = 1;
+    videoRef.current.play().catch(() => {});
+    setRate(1);
+    setPlaying(true);
+  }, [open, replayUrl]);
+
+  const changeRate = (r: number) => {
+    setRate(r);
+    if (videoRef.current) videoRef.current.playbackRate = r;
+  };
+
+  const restart = () => {
+    if (!videoRef.current) return;
+    videoRef.current.currentTime = 0;
+    videoRef.current.play().catch(() => {});
+    setPlaying(true);
+  };
+
+  const togglePlay = () => {
+    if (!videoRef.current) return;
+    if (videoRef.current.paused) { videoRef.current.play(); setPlaying(true); }
+    else { videoRef.current.pause(); setPlaying(false); }
+  };
+
+  return (
+    <>
+      {/* Backdrop */}
+      {open && (
+        <div
+          className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm"
+          onClick={onClose}
+        />
+      )}
+
+      {/* Slide-up panel */}
+      <div
+        className={`fixed bottom-0 left-0 right-0 z-50 transform transition-transform duration-400 ease-out ${open ? 'translate-y-0' : 'translate-y-full'}`}
+        style={{ maxHeight: '90vh' }}
+      >
+        <div className="bg-slate-900 border-t border-slate-700 rounded-t-3xl shadow-2xl flex flex-col" style={{ maxHeight: '90vh' }}>
+          {/* Header */}
+          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700/60 shrink-0">
+            <div className="flex items-center gap-3">
+              <MonitorPlay className="w-5 h-5 text-blue-400" />
+              <div>
+                <p className="font-bold text-white text-sm">Instant Replay</p>
+                {skierName && <p className="text-slate-400 text-xs">{skierName}</p>}
+              </div>
+              <span className="bg-blue-600/30 text-blue-300 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border border-blue-600/40">
+                REVIEW
+              </span>
+            </div>
+            <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/10">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Video */}
+          <div className="relative bg-black shrink-0">
+            <video
+              ref={videoRef}
+              className="w-full"
+              style={{ maxHeight: '55vh', objectFit: 'contain' }}
+              playsInline
+              onClick={togglePlay}
+            />
+            {!playing && (
+              <div
+                className="absolute inset-0 flex items-center justify-center bg-black/30 cursor-pointer"
+                onClick={togglePlay}
+              >
+                <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center backdrop-blur">
+                  <Play className="w-7 h-7 text-white fill-white ml-1" />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Controls */}
+          <div className="px-5 py-4 flex items-center justify-between gap-4 shrink-0">
+            {/* Playback controls */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={restart}
+                className="flex items-center gap-1.5 text-slate-300 hover:text-white bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" /> Restart
+              </button>
+
+              <div className="flex items-center gap-1 bg-white/10 rounded-lg px-2 py-1.5">
+                <Gauge className="w-3.5 h-3.5 text-slate-400 mr-1" />
+                {[0.25, 0.5, 1].map(r => (
+                  <button
+                    key={r}
+                    onClick={() => changeRate(r)}
+                    className={`text-xs font-bold px-2 py-0.5 rounded transition-colors ${rate === r ? 'text-emerald-400 bg-emerald-400/20' : 'text-slate-400 hover:text-white'}`}
+                  >
+                    {r === 1 ? '1×' : `${r}×`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Save */}
+            <button
+              onClick={onSave}
+              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-xl text-sm transition-colors"
+            >
+              <Download className="w-4 h-4" /> Save Recording
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── Lite Score Panel ─────────────────────────────────────────────────────────
+// Operator enters all judge scores directly on the Recording screen.
+interface LiteScorePanelProps {
+  activePassId: number | null;
+  tournamentId: number;
+  judgeCount: number;
+}
+
+const SCORE_LABELS: Record<string, string> = {
+  '6_no_gates': '6 NG',
+};
+function scoreLabel(s: string) { return SCORE_LABELS[s] ?? s; }
+
+function LiteScorePanel({ activePassId, tournamentId, judgeCount }: LiteScorePanelProps) {
+  const scoringPanel = getJudgingPanel(judgeCount);
+  const [submitted, setSubmitted] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const queryClient = useQueryClient();
+
+  // Reset when pass changes
+  useEffect(() => {
+    setSubmitted({});
+    setBusy({});
+  }, [activePassId]);
+
+  const submitScore = async (role: string, score: string) => {
+    if (!activePassId) return;
+    setBusy(b => ({ ...b, [role]: true }));
+    try {
+      await fetch(`/api/passes/${activePassId}/judge-scores`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tournament_id: tournamentId,
+          judge_id: null,
+          judge_name: `Operator`,
+          judge_role: role,
+          pass_score: score,
+        }),
+      });
+      setSubmitted(s => ({ ...s, [role]: score }));
+      queryClient.invalidateQueries({ queryKey: ['/api/tournaments', tournamentId, 'passes'] });
+    } catch {}
+    setBusy(b => ({ ...b, [role]: false }));
+  };
+
+  if (!activePassId) {
+    return (
+      <Card className="p-4 border-dashed">
+        <p className="text-center text-sm text-muted-foreground">Start a pass to enter scores in Lite mode.</p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="px-4 py-3 border-b bg-primary/5 flex items-center gap-2">
+        <Square className="w-4 h-4 text-primary" />
+        <span className="font-bold text-sm">Lite Mode — Score Entry</span>
+        <span className="text-xs text-muted-foreground ml-1">· {judgeCount} judge{judgeCount !== 1 ? 's' : ''}</span>
+      </div>
+
+      {/* One table per judge */}
+      <div
+        className="grid gap-0 divide-x"
+        style={{ gridTemplateColumns: `repeat(${scoringPanel.length}, minmax(0, 1fr))` }}
+      >
+        {scoringPanel.map(station => {
+          const done = submitted[station.role];
+          const loading = busy[station.role];
+          return (
+            <div key={station.role} className={`p-3 space-y-2 ${done ? 'bg-emerald-50 dark:bg-emerald-950/20' : ''}`}>
+              {/* Column header */}
+              <div className="text-center pb-1 border-b">
+                <p className="font-bold text-sm leading-tight">{station.label}</p>
+                {done && (
+                  <div className="flex items-center justify-center gap-1 mt-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                    <span className="font-display font-black text-base text-emerald-600">{scoreLabel(done)}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Score buttons: 3 columns × 4 rows */}
+              <div className="grid grid-cols-3 gap-1">
+                {VALID_IWWF_SCORES.map(score => {
+                  const isSelected = submitted[station.role] === score;
+                  return (
+                    <button
+                      key={score}
+                      onClick={() => submitScore(station.role, score)}
+                      disabled={loading}
+                      className={`
+                        text-xs font-bold rounded-lg py-1.5 transition-all border
+                        ${isSelected
+                          ? 'bg-emerald-500 text-white border-emerald-600 shadow-inner'
+                          : 'bg-card hover:bg-primary/10 border-border hover:border-primary text-foreground'
+                        }
+                        disabled:opacity-40 disabled:cursor-not-allowed
+                      `}
+                    >
+                      {scoreLabel(score)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
 // ─── Tournament-aware Judge Station QR Panel ───────────────────────────────────
-// QR codes encode the JUDGING POSITION (role), not the person.
-// Stations shown depend on the tournament's judge_count:
-//   1 judge  → Judge A only (also Chief & Boat)
-//   3 judges → Judge A, B, C/Boat + Chief Judge
-//   5 judges → Judge A, B, C, D, E/Boat + Chief Judge
 function JudgeConnectPanel({ tournament }: { tournament: any }) {
   const [open, setOpen] = useState(false);
   const { data: network } = useNetworkInfo();
@@ -459,7 +660,6 @@ function JudgeConnectPanel({ tournament }: { tournament: any }) {
   const judgeCount = tournament?.judge_count ?? 1;
   const panel = getJudgingPanel(judgeCount);
 
-  // Add Chief Judge QR unless 1-judge (where A is also chief)
   const stations = [
     ...panel.map(s => ({ role: s.role, label: s.label })),
     ...(judgeCount > 1 ? [{ role: 'chief_judge', label: 'Chief Judge' }] : []),
@@ -512,13 +712,7 @@ function JudgeConnectPanel({ tournament }: { tournament: any }) {
               return (
                 <div key={station.role} className="flex flex-col items-center gap-2 p-3 rounded-xl border bg-card hover:border-primary/40 transition-colors">
                   <div className="p-2 bg-white rounded-xl border shadow-sm">
-                    <QRCodeSVG
-                      value={url}
-                      size={110}
-                      level="M"
-                      fgColor="#064e3b"
-                      bgColor="#ffffff"
-                    />
+                    <QRCodeSVG value={url} size={110} level="M" fgColor="#064e3b" bgColor="#ffffff" />
                   </div>
                   <div className="text-center">
                     <p className="font-bold text-sm leading-tight">{station.label}</p>
@@ -569,6 +763,22 @@ export default function Recording() {
   const [speed, setSpeed] = useState('55');
   const [round, setRound] = useState('1');
 
+  // Persistent settings
+  const [liteMode, setLiteMode] = useState(() => localStorage.getItem(LS_LITE_MODE) === 'true');
+  const [askSave, setAskSave] = useState(() => localStorage.getItem(LS_ASK_SAVE) === 'true');
+  const hasFSA = typeof (window as any).showSaveFilePicker === 'function';
+
+  const toggleLiteMode = () => {
+    const next = !liteMode;
+    setLiteMode(next);
+    localStorage.setItem(LS_LITE_MODE, String(next));
+  };
+  const toggleAskSave = () => {
+    const next = !askSave;
+    setAskSave(next);
+    localStorage.setItem(LS_ASK_SAVE, String(next));
+  };
+
   const video = useVideoRecorder();
   const prevActivePassId = useRef<number | null>(null);
 
@@ -577,17 +787,11 @@ export default function Recording() {
     const curr = activePass?.id ?? null;
     const prev = prevActivePassId.current;
 
-    if (curr && !prev) {
-      // Pass just started — begin recording if camera active
-      if (video.mode === 'preview') {
-        video.startRecording();
-        toast({ title: "Recording started", description: activePass?.skier_name });
-      }
-    } else if (!curr && prev) {
-      // Pass just ended — stop recording → auto-replay
-      if (video.mode === 'recording') {
-        video.stopRecording();
-      }
+    if (curr && !prev && video.mode === 'preview') {
+      video.startRecording();
+      toast({ title: "Recording started", description: activePass?.skier_name });
+    } else if (!curr && prev && video.mode === 'recording') {
+      video.stopRecording();
     }
     prevActivePassId.current = curr;
   }, [activePass?.id]);
@@ -614,6 +818,8 @@ export default function Recording() {
     return <div className="p-8 text-center"><p className="text-xl text-muted-foreground">Select a tournament from Home first.</p></div>;
   }
 
+  const judgeCount = tournament?.judge_count ?? 1;
+
   const handleStartPass = () => {
     if (!skierId) return toast({ title: "Select a skier", variant: "destructive" });
     const skier = skiers?.find(s => s.id.toString() === skierId);
@@ -636,20 +842,51 @@ export default function Recording() {
     updateMutation.mutate({ id: activePass.id, data: { status: 'scored' } });
   };
 
+  const openLiveView = () => {
+    const base = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
+    const url = `${window.location.origin}${base}/live?t=${activeTournamentId}`;
+    window.open(url, 'slalom-live', 'width=1280,height=720,menubar=no,toolbar=no,location=no,status=no');
+  };
+
   return (
     <div className="space-y-5">
       <PageHeader
         title="Pass Recording"
         subtitle="Operator Control Panel"
         actions={
-          <Badge variant={activePass ? "success" : "outline"} className={activePass ? "animate-pulse" : ""}>
-            {activePass ? "● SKIER ON WATER" : "STANDBY"}
-          </Badge>
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            <Badge variant={activePass ? "success" : "outline"} className={activePass ? "animate-pulse" : ""}>
+              {activePass ? "● SKIER ON WATER" : "STANDBY"}
+            </Badge>
+
+            {/* Lite Mode toggle */}
+            <button
+              onClick={toggleLiteMode}
+              className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors ${
+                liteMode
+                  ? 'bg-amber-500/20 border-amber-500/50 text-amber-600 dark:text-amber-400'
+                  : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/30'
+              }`}
+              title={liteMode ? 'Lite mode: operator enters all scores — click to switch to remote judging' : 'Switch to Lite mode: enter scores directly on this screen'}
+            >
+              <Square className="w-3.5 h-3.5" />
+              {liteMode ? 'Lite ON' : 'Lite'}
+            </button>
+
+            {/* Pop-out live view */}
+            <button
+              onClick={openLiveView}
+              className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+              title="Open fullscreen live view in a new window — drag to a second monitor"
+            >
+              <Monitor className="w-3.5 h-3.5" /> Live View
+            </button>
+          </div>
         }
       />
 
       <div className="grid xl:grid-cols-5 gap-5">
-        {/* ── Left column: Video + Judge Connect ── */}
+        {/* ── Left column: Video + Judge/Lite panel ── */}
         <div className="xl:col-span-3 space-y-4">
           <VideoPanel
             video={video}
@@ -661,59 +898,44 @@ export default function Recording() {
           {video.mode !== 'idle' && (
             <div className="flex items-center gap-2 flex-wrap">
               {video.mode === 'preview' && (
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={video.startRecording}
-                  title="Start recording manually"
-                  className="flex items-center gap-2"
-                >
+                <Button variant="primary" size="sm" onClick={video.startRecording} className="flex items-center gap-2">
                   <Circle className="w-3.5 h-3.5 fill-current" /> Record
                 </Button>
               )}
               {video.mode === 'recording' && (
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={video.stopRecording}
-                  className="flex items-center gap-2"
-                >
+                <Button variant="destructive" size="sm" onClick={video.stopRecording} className="flex items-center gap-2">
                   <Square className="w-3.5 h-3.5 fill-current" /> Stop Recording
                 </Button>
               )}
-              {video.mode === 'replay' && (
-                <>
-                  <Button variant="outline" size="sm" onClick={video.backToPreview} className="flex items-center gap-2">
-                    <Camera className="w-3.5 h-3.5" /> Back to Live
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => { if (video.videoRef.current) { video.videoRef.current.currentTime = 0; video.videoRef.current.play(); } }}>
-                    <RefreshCw className="w-3.5 h-3.5" />
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => video.downloadRecording(activePass?.skier_name ?? undefined)}
-                    className="flex items-center gap-2"
-                    title="Download recording — your browser will ask where to save it"
-                  >
-                    <Download className="w-3.5 h-3.5" /> Save
-                  </Button>
-                </>
-              )}
               <span className="text-xs text-muted-foreground ml-1">
                 {video.mode === 'preview' && 'Camera live — recording starts automatically when a pass begins'}
-                {video.mode === 'recording' && 'Recording… will stop and replay automatically when pass ends'}
-                {video.mode === 'replay' && 'Instant replay — Save to download the .webm file'}
+                {video.mode === 'recording' && 'Recording… stops automatically when the pass ends — instant replay will appear'}
               </span>
             </div>
           )}
 
-          <JudgeConnectPanel tournament={tournament} />
+          {/* Save location setting */}
+          {hasFSA && (
+            <label className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors select-none">
+              <input type="checkbox" checked={askSave} onChange={toggleAskSave} className="rounded" />
+              Ask where to save each recording (choose folder/filename)
+            </label>
+          )}
+
+          {/* Judge connect panel OR lite score entry */}
+          {liteMode ? (
+            <LiteScorePanel
+              activePassId={activePass?.id ?? null}
+              tournamentId={activeTournamentId}
+              judgeCount={judgeCount}
+            />
+          ) : (
+            <JudgeConnectPanel tournament={tournament} />
+          )}
         </div>
 
         {/* ── Right column: Pass control + recent passes ── */}
         <div className="xl:col-span-2 space-y-5">
-          {/* Pass control card */}
           <Card className="p-5 bg-gradient-to-br from-card to-emerald-50 dark:to-emerald-950/20 shadow-xl border-primary/20">
             <h2 className="text-xl font-bold mb-5 flex items-center gap-2">
               <Timer className="text-primary w-5 h-5" />
@@ -811,26 +1033,26 @@ export default function Recording() {
                 {recentPasses.map(pass => {
                   const rc = pass.rope_length ? getRopeColour(pass.rope_length) : null;
                   return (
-                  <Card key={pass.id} className="p-3 hover:border-primary/50 transition-colors flex justify-between items-center">
-                    <div>
-                      <p className="font-bold text-sm">{pass.skier_name}</p>
-                      <p className="text-[11px] text-muted-foreground font-semibold flex items-center gap-1.5 flex-wrap">
-                        R{pass.round_number} · {pass.speed_kph}kph
-                        {rc && pass.rope_length && (
-                          <span
-                            className="inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold"
-                            style={{ background: rc.bg, color: rc.text, borderColor: rc.border }}
-                          >
-                            {pass.rope_length}m
-                          </span>
-                        )}
-                      </p>
-                    </div>
-                    <div className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200 px-3 py-1 rounded-lg text-center min-w-[3rem]">
-                      <p className="text-[10px] uppercase font-bold opacity-70">Score</p>
-                      <p className="font-display font-black text-lg leading-none">{pass.buoys_scored ?? '—'}</p>
-                    </div>
-                  </Card>
+                    <Card key={pass.id} className="p-3 hover:border-primary/50 transition-colors flex justify-between items-center">
+                      <div>
+                        <p className="font-bold text-sm">{pass.skier_name}</p>
+                        <p className="text-[11px] text-muted-foreground font-semibold flex items-center gap-1.5 flex-wrap">
+                          R{pass.round_number} · {pass.speed_kph}kph
+                          {rc && pass.rope_length && (
+                            <span
+                              className="inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold"
+                              style={{ background: rc.bg, color: rc.text, borderColor: rc.border }}
+                            >
+                              {pass.rope_length}m
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                      <div className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200 px-3 py-1 rounded-lg text-center min-w-[3rem]">
+                        <p className="text-[10px] uppercase font-bold opacity-70">Score</p>
+                        <p className="font-display font-black text-lg leading-none">{pass.buoys_scored ?? '—'}</p>
+                      </div>
+                    </Card>
                   );
                 })}
               </div>
@@ -838,6 +1060,15 @@ export default function Recording() {
           </div>
         </div>
       </div>
+
+      {/* Replay slide-up panel — portal-style, appears over everything */}
+      <ReplaySlidePanel
+        replayUrl={video.replayUrl}
+        open={video.showReplay}
+        onClose={video.dismissReplay}
+        onSave={() => video.saveRecording(activePass?.skier_name ?? undefined)}
+        skierName={activePass?.skier_name}
+      />
     </div>
   );
 }
@@ -867,7 +1098,9 @@ function JudgeScoreStatusBar({ passId }: { passId: number }) {
         {scores.map((s: any) => (
           <div key={s.id} className="flex items-center gap-1.5 bg-card border rounded-lg px-2.5 py-1">
             <span className="text-[10px] font-bold text-muted-foreground">{ROLE_SHORT[s.judge_role] ?? 'J'}</span>
-            <span className="font-display font-bold text-sm text-emerald-700">{s.pass_score}</span>
+            <span className="font-display font-bold text-sm text-emerald-700">
+              {s.pass_score === '6_no_gates' ? '6 NG' : s.pass_score}
+            </span>
             <CheckCircle2 className="w-3 h-3 text-emerald-500" />
           </div>
         ))}
