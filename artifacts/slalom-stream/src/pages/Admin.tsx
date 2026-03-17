@@ -1257,19 +1257,17 @@ function UpdatePanel() {
               <Download className="w-3.5 h-3.5" />
               Download update ZIP
             </Button>
-            {downloadUrl !== thisAppDownloadUrl && (
-              <Button
-                variant="outline"
-                className="h-8 text-xs gap-1.5 text-blue-700 dark:text-blue-300 border-blue-300 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/40"
-                onClick={useThisAppAsSource}
-              >
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                Use this app as update source
-              </Button>
-            )}
+            <Button
+              variant="outline"
+              className={`h-8 text-xs gap-1.5 ${downloadUrl === thisAppDownloadUrl ? 'text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'text-blue-700 dark:text-blue-300 border-blue-300 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/40'}`}
+              onClick={useThisAppAsSource}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              {downloadUrl === thisAppDownloadUrl ? 'Using this app ✓' : 'Use this app as update source'}
+            </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            <strong>Download update ZIP</strong> saves the current build to your device for distribution. <strong>Use this app as update source</strong> sets the download URL to this app's own endpoint — venues can then fetch updates automatically without any file handling.
+            <strong>Download update ZIP</strong> saves the current build to your device for distribution. <strong>Use this app as update source</strong> sets the download URL to this published app's endpoint — venues can then fetch updates automatically with one click after each republish.
           </p>
         </div>
 

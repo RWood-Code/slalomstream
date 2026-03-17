@@ -239,8 +239,10 @@ router.get("/download", (_req, res) => {
   const frontendDistPath = path.join(wsRoot, "artifacts", "slalom-stream", "dist");
   const versionFilePath = path.join(wsRoot, "version.json");
 
-  const hasApiDist      = existsSync(apiDistPath);
-  const hasFrontendDist = existsSync(frontendDistPath);
+  // Vite outputs to dist/public — check for the actual built index.html
+  const frontendIndexPath = path.join(wsRoot, "artifacts", "slalom-stream", "dist", "public", "index.html");
+  const hasApiDist        = existsSync(path.join(apiDistPath, "index.cjs"));
+  const hasFrontendDist   = existsSync(frontendIndexPath);
 
   if (!hasApiDist && !hasFrontendDist) {
     return res.status(503).json({
@@ -258,6 +260,7 @@ router.get("/download", (_req, res) => {
       zip.addLocalFolder(apiDistPath, "artifacts/api-server/dist");
     }
     if (hasFrontendDist) {
+      // Package the whole dist folder (which contains public/ inside)
       zip.addLocalFolder(frontendDistPath, "artifacts/slalom-stream/dist");
     }
 
@@ -343,7 +346,8 @@ async function scanAndStorePendingZip(tempZipPath: string): Promise<{ version: s
   } catch { /* unknown is fine */ }
 
   const hasApiDist      = existsSync(path.join(wsRoot, "artifacts", "api-server",   "dist", "index.cjs"));
-  const hasFrontendDist = existsSync(path.join(wsRoot, "artifacts", "slalom-stream", "dist", "index.html"));
+  // Vite outputs to dist/public — check the real built file location
+  const hasFrontendDist = existsSync(path.join(wsRoot, "artifacts", "slalom-stream", "dist", "public", "index.html"));
 
   if (!hasApiDist && !hasFrontendDist) {
     rmSync(extractDir, { recursive: true, force: true });
