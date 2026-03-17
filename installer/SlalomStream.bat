@@ -25,6 +25,30 @@ if not defined DATABASE_URL (
   exit /b 1
 )
 
+rem Check for Replit's internal database hostname — not accessible from Windows
+echo %DATABASE_URL% | findstr /i "@helium" >nul 2>&1
+if not errorlevel 1 (
+  echo.
+  echo  *** DATABASE CONFIGURATION REQUIRED ***
+  echo.
+  echo  The database URL in slalomstream.conf points to Replit's
+  echo  internal server ("helium") which cannot be reached from
+  echo  this computer.
+  echo.
+  echo  You need a PostgreSQL database that is accessible over the
+  echo  internet. The easiest free option is Neon:
+  echo.
+  echo    1. Go to https://neon.tech and create a free account
+  echo    2. Create a new project (choose a region near New Zealand)
+  echo    3. Copy the "Connection string" from the dashboard
+  echo    4. Open slalomstream.conf in Notepad (in this folder)
+  echo    5. Replace the DATABASE_URL= line with your Neon URL
+  echo    6. Run SlalomStream again
+  echo.
+  pause
+  exit /b 1
+)
+
 set SERVE_STATIC=true
 set STATIC_DIR=%~dp0artifacts\slalom-stream\dist\public
 set NODE_ENV=production

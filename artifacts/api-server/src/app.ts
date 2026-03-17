@@ -15,13 +15,14 @@ app.use("/api", router);
 // Serve the built frontend when running as a standalone local server.
 // Set SERVE_STATIC=true and STATIC_DIR to the path of the built frontend files.
 const serveStatic = process.env.SERVE_STATIC === "true";
-const staticDir = process.env.STATIC_DIR || path.resolve(process.cwd(), "public");
+// Always resolve to absolute path — res.sendFile requires it
+const staticDir = path.resolve(process.env.STATIC_DIR || "public");
 
 if (serveStatic && existsSync(staticDir)) {
   app.use(express.static(staticDir));
   // SPA fallback — all non-API routes serve index.html (Express 5 wildcard syntax)
   app.get("/{*path}", (_req, res) => {
-    res.sendFile(path.join(staticDir, "index.html"));
+    res.sendFile(path.resolve(staticDir, "index.html"));
   });
   console.log(`Serving static frontend from: ${staticDir}`);
 }

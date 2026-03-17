@@ -1,0 +1,185 @@
+
+ ===================================================
+   SlalomStream - Tournament Management System
+ ===================================================
+
+ Starting on port 3000...
+
+ Judges and scoreboard: open a browser on any device connected
+ to the same WiFi network and go to:
+
+   http://(this-computer-IP):3000
+
+ On this computer: http://localhost:3000
+
+ Press Ctrl+C to stop the server.
+
+Serving static frontend from: artifacts\slalom-stream\dist\public
+Server listening on port 3000
+TypeError: path must be absolute or specify root to res.sendFile
+    at Nt.sendFile (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:41:5125)
+    at C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:264:862
+    at nl.handleRequest (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:25761)
+    at u (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:27680)
+    at il.dispatch (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:27436)
+    at i (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:31511)
+    at nl.handleRequest (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:25761)
+    at C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:30392
+    at p (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:32491)
+    at p (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:32561)
+Error: Failed query: select "id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at" from "tournaments" order by "tournaments"."created_at"
+params:
+    at mS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37254)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40730
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:238:172417
+Error: Failed query: select "id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at" from "tournaments" order by "tournaments"."created_at"
+params:
+    at mS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37254)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40730
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:238:172417
+[Startup] Startup checks failed (non-fatal): t [Error]: Failed query: select "id", "first_name", "surname", "region", "financial", "slalom_grade", "slalom_notes", "is_active", "pin", "judge_role", "is_admin", "created_at" from "officials_register" limit $1
+params: 1
+    at mS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37254)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40730
+    at async MBe (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:94:37149)
+    at async bb (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:94:37437) {
+  query: 'select "id", "first_name", "surname", "region", "financial", "slalom_grade", "slalom_notes", "is_active", "pin", "judge_role", "is_admin", "created_at" from "officials_register" limit $1',
+  params: [ 1 ],
+  cause: Error: getaddrinfo ENOTFOUND helium
+      at C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:59:15265
+      at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40939
+      at async mS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37229)
+      at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40730
+      at async MBe (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:94:37149)
+      at async bb (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:94:37437) {
+    errno: -3008,
+    code: 'ENOTFOUND',
+    syscall: 'getaddrinfo',
+    hostname: 'helium'
+  }
+}
+[SurePath] Startup error: t [Error]: Failed query: select "id", "admin_pin", "waterskiconnect_enabled", "waterskiconnect_url", "waterskiconnect_token", "surepath_event_name", "surepath_event_sub_id", "surepath_observer_pin", "surepath_enabled", "active_tournament_id", "connection_mode", "public_url", "github_repo", "update_download_url" from "app_settings" where "app_settings"."id" = $1
+params: 1
+    at mS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37254)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40730
+    at async fA (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:238:179638) {
+  query: 'select "id", "admin_pin", "waterskiconnect_enabled", "waterskiconnect_url", "waterskiconnect_token", "surepath_event_name", "surepath_event_sub_id", "surepath_observer_pin", "surepath_enabled", "active_tournament_id", "connection_mode", "public_url", "github_repo", "update_download_url" from "app_settings" where "app_settings"."id" = $1',
+  params: [ 1 ],
+  cause: Error: getaddrinfo ENOTFOUND helium
+      at C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:59:15265
+      at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40939
+      at async mS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37229)
+      at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40730
+      at async fA (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:238:179638) {
+    errno: -3008,
+    code: 'ENOTFOUND',
+    syscall: 'getaddrinfo',
+    hostname: 'helium'
+  }
+}
+TypeError: path must be absolute or specify root to res.sendFile
+    at Nt.sendFile (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:41:5125)
+    at C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:264:862
+    at nl.handleRequest (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:25761)
+    at u (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:27680)
+    at il.dispatch (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:27436)
+    at i (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:31511)
+    at nl.handleRequest (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:25761)
+    at C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:30392
+    at p (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:32491)
+    at p (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:32561)
+Error: Failed query: select "id", "first_name", "surname", "region", "financial", "slalom_grade", "slalom_notes", "is_active", "pin", "judge_role", "is_admin", "created_at" from "officials_register" order by "officials_register"."surname" asc, "officials_register"."first_name" asc
+params:
+    at mS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37254)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40730
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:238:186430
+Error: Failed query: select "id", "first_name", "surname", "region", "financial", "slalom_grade", "slalom_notes", "is_active", "pin", "judge_role", "is_admin", "created_at" from "officials_register" order by "officials_register"."surname" asc, "officials_register"."first_name" asc
+params:
+    at mS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37254)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40730
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:238:186430
+TypeError: path must be absolute or specify root to res.sendFile
+    at Nt.sendFile (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:41:5125)
+    at C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:264:862
+    at nl.handleRequest (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:25761)
+    at u (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:27680)
+    at il.dispatch (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:27436)
+    at i (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:31511)
+    at nl.handleRequest (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:25761)
+    at C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:30392
+    at p (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:32491)
+    at p (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:32561)
+Error: Failed query: select "id", "admin_pin", "waterskiconnect_enabled", "waterskiconnect_url", "waterskiconnect_token", "surepath_event_name", "surepath_event_sub_id", "surepath_observer_pin", "surepath_enabled", "active_tournament_id", "connection_mode", "public_url", "github_repo", "update_download_url" from "app_settings" where "app_settings"."id" = $1
+params: 1
+    at mS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37254)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40730
+    at async Lb (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:238:182393)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:238:183930
+Error: Failed query: select "id", "admin_pin", "waterskiconnect_enabled", "waterskiconnect_url", "waterskiconnect_token", "surepath_event_name", "surepath_event_sub_id", "surepath_observer_pin", "surepath_enabled", "active_tournament_id", "connection_mode", "public_url", "github_repo", "update_download_url" from "app_settings" where "app_settings"."id" = $1
+params: 1
+    at mS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37254)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40730
+    at async Lb (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:238:182393)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:238:183930
+TypeError: path must be absolute or specify root to res.sendFile
+    at Nt.sendFile (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:41:5125)
+    at C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:264:862
+    at nl.handleRequest (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:25761)
+    at u (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:27680)
+    at il.dispatch (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:27436)
+    at i (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:31511)
+    at nl.handleRequest (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:25761)
+    at C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:30392
+    at p (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:32491)
+    at p (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:32561)
+TypeError: path must be absolute or specify root to res.sendFile
+    at Nt.sendFile (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:41:5125)
+    at C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:264:862
+    at nl.handleRequest (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:25761)
+    at u (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:27680)
+    at il.dispatch (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:27436)
+    at i (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:31511)
+    at nl.handleRequest (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:25761)
+    at C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:30392
+    at p (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:32491)
+    at p (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:31:32561)
+Error: Failed query: select "id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at" from "tournaments" order by "tournaments"."created_at"
+params:
+    at mS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37254)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40730
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:238:172417
+Error: Failed query: select "id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at" from "tournaments" order by "tournaments"."created_at"
+params:
+    at mS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37254)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40730
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:238:172417
+Error: Failed query: select "id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at" from "tournaments" order by "tournaments"."created_at"
+params:
+    at mS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37254)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40730
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:238:172417
+Error: Failed query: insert into "tournaments" ("id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at") values (default, $1, default, $2, $3, default, default, default, $4, default, default, $5, default, default) returning "id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at"
+params: TT01,3,L,2,true
+    at mS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37254)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40730
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:238:172561
+Error: Failed query: insert into "tournaments" ("id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at") values (default, $1, default, $2, $3, default, default, default, $4, default, default, $5, default, default) returning "id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at"
+params: TT01,3,L,2,true
+    at mS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37254)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:40730
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:238:172561
