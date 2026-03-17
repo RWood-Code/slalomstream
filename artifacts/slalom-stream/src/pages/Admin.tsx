@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '@/lib/store';
 import { useListSkiers, useCreateSkier, useListJudges, useCreateJudge, useVerifyAdminPin } from '@workspace/api-client-react';
 import { Card, Button, PageHeader, Input, Select, Badge } from '@/components/ui/shared';
@@ -127,6 +127,7 @@ export default function Admin() {
         <AppSettingsPanel />
         <SurePathPanel />
         <OfficialsPinsPanel />
+        <UpdatePanel />
         <TournamentArchive />
       </div>
 
@@ -976,6 +977,200 @@ function EmsImportPanel({ tournamentId }: { tournamentId: number }) {
               Import {selected.size} Participant{selected.size !== 1 ? 's' : ''} into Tournament
             </Button>
           </div>
+        )}
+      </div>
+    </AdminSection>
+  );
+}
+
+// ─── Software Update ───────────────────────────────────────────────────────────
+type CheckResult = {
+  status: 'up_to_date' | 'update_available' | 'no_repo' | 'no_releases' | 'error';
+  current?: string;
+  latest?: string;
+  release_notes?: string | null;
+  html_url?: string | null;
+  error?: string;
+};
+
+function UpdatePanel() {
+  const { toast } = useToast();
+  const { data: settings, refetch: refetchSettings } = useQuery({
+    queryKey: ['app-settings'],
+    queryFn: async () => { const res = await fetch('/api/settings'); return res.json(); },
+  });
+
+  const [repoInput, setRepoInput] = useState('');
+  const [checkResult, setCheckResult] = useState<CheckResult | null>(null);
+  const [isChecking, setIsChecking] = useState(false);
+  const [applyStarted, setApplyStarted] = useState(false);
+  const [logContent, setLogContent] = useState('');
+  const [restarting, setRestarting] = useState(false);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (settings?.github_repo) setRepoInput(settings.github_repo);
+  }, [settings]);
+
+  useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
+
+  const saveRepo = async (repo: string) => {
+    await fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ github_repo: repo }),
+    });
+    refetchSettings();
+    toast({ title: 'GitHub repo saved' });
+  };
+
+  const checkForUpdate = async () => {
+    if (repoInput !== (settings?.github_repo ?? '')) await saveRepo(repoInput);
+    setIsChecking(true);
+    setCheckResult(null);
+    try {
+      const res = await fetch('/api/update/check');
+      setCheckResult(await res.json());
+    } catch (err: any) {
+      setCheckResult({ status: 'error', error: err.message });
+    } finally {
+      setIsChecking(false);
+    }
+  };
+
+  const applyUpdate = async () => {
+    setApplyStarted(true);
+    setLogContent('');
+    await fetch('/api/update/apply', { method: 'POST' });
+
+    intervalRef.current = setInterval(async () => {
+      try {
+        const res = await fetch('/api/update/log');
+        const data = await res.json();
+        setLogContent(data.log || '');
+        const done = data.log?.includes('Server will restart now') || data.log?.includes('Update failed');
+        if (done) {
+          clearInterval(intervalRef.current!);
+          if (data.log?.includes('Server will restart now')) {
+            setRestarting(true);
+            setTimeout(async () => {
+              for (let i = 0; i < 25; i++) {
+                await new Promise(r => setTimeout(r, 2000));
+                try {
+                  const ping = await fetch('/api/health');
+                  if (ping.ok) { window.location.reload(); return; }
+                } catch {}
+              }
+            }, 4000);
+          }
+        }
+      } catch {}
+    }, 1000);
+  };
+
+  const statusBadge = checkResult
+    ? checkResult.status === 'up_to_date'       ? <Badge variant="success" className="text-xs flex gap-1 items-center"><CheckCircle2 className="w-3 h-3" /> Up to date</Badge>
+    : checkResult.status === 'update_available' ? <Badge variant="warning" className="text-xs">Update available: v{checkResult.latest}</Badge>
+    : checkResult.status === 'no_repo'          ? <Badge variant="outline" className="text-xs text-muted-foreground">No repo configured</Badge>
+    : checkResult.status === 'no_releases'      ? <Badge variant="outline" className="text-xs text-muted-foreground">No releases yet</Badge>
+    :                                             <Badge variant="destructive" className="text-xs">Error</Badge>
+    : undefined;
+
+  return (
+    <AdminSection
+      icon={<RefreshCw className="w-4 h-4" />}
+      title="Software Update"
+      subtitle="Check for and apply updates from your GitHub repository"
+      badge={statusBadge}
+    >
+      <div className="p-5 space-y-4">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">GitHub Repository</p>
+          <div className="flex gap-2">
+            <Input
+              placeholder="owner/repository-name"
+              value={repoInput}
+              onChange={e => setRepoInput(e.target.value)}
+              className="h-9 font-mono text-sm flex-1"
+            />
+            <Button variant="outline" className="h-9 shrink-0" onClick={() => saveRepo(repoInput)} disabled={!repoInput}>
+              Save
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground mt-1.5">
+            Enter the GitHub path, e.g. <code className="bg-muted px-1 rounded font-mono">yourname/slalomstream</code>. The repo must have GitHub Releases published for version checking to work.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2 items-center">
+          <Button
+            variant="outline"
+            className="h-9 gap-2"
+            onClick={checkForUpdate}
+            isLoading={isChecking}
+            disabled={isChecking || applyStarted}
+          >
+            <RefreshCw className="w-4 h-4" />
+            Check for Updates
+          </Button>
+
+          {checkResult?.status === 'update_available' && !applyStarted && (
+            <Button variant="primary" className="h-9 gap-2" onClick={applyUpdate}>
+              <Download className="w-4 h-4" />
+              Apply Update to v{checkResult.latest}
+            </Button>
+          )}
+
+          {checkResult && <div className="flex-1 flex justify-end">{statusBadge}</div>}
+        </div>
+
+        {checkResult?.status === 'update_available' && checkResult.release_notes && (
+          <div className="bg-muted/50 rounded-xl p-3 border text-xs space-y-1">
+            <p className="font-bold">What's new in v{checkResult.latest}:</p>
+            <p className="text-muted-foreground whitespace-pre-wrap leading-relaxed">{checkResult.release_notes}</p>
+          </div>
+        )}
+
+        {checkResult?.status === 'error' && (
+          <div className="flex items-start gap-2 p-3 bg-destructive/10 rounded-xl border border-destructive/20 text-xs text-destructive">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{checkResult.error}</span>
+          </div>
+        )}
+
+        {checkResult?.status === 'no_repo' && (
+          <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-700 text-xs text-amber-800 dark:text-amber-300">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold">No repository configured</p>
+              <p className="mt-0.5">Save a GitHub repository path above to enable update checking. The codebase must be a git clone of that repo.</p>
+            </div>
+          </div>
+        )}
+
+        {applyStarted && (
+          restarting ? (
+            <div className="flex items-center gap-3 p-4 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl border border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 text-sm font-semibold">
+              <RefreshCw className="w-5 h-5 animate-spin shrink-0" />
+              <div>
+                <p>Update applied — server is restarting…</p>
+                <p className="font-normal text-xs mt-0.5">This page will reload automatically when the server is back online.</p>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">Update Log</p>
+              <pre className="bg-muted rounded-xl p-3 text-[11px] font-mono overflow-y-auto max-h-60 whitespace-pre-wrap break-all">
+                {logContent || 'Starting…'}
+              </pre>
+            </div>
+          )
+        )}
+
+        {!applyStarted && (
+          <p className="text-xs text-muted-foreground border-t pt-3">
+            Requires the app to be installed via <code className="bg-muted px-1 rounded font-mono">git clone</code> and started with <code className="bg-muted px-1 rounded font-mono">start.sh</code> / <code className="bg-muted px-1 rounded font-mono">start.ps1</code>. ZIP installs must be updated manually.
+          </p>
         )}
       </div>
     </AdminSection>

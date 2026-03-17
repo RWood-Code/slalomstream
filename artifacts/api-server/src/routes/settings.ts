@@ -31,6 +31,7 @@ router.put("/", async (req, res) => {
     active_tournament_id,
     connection_mode,
     public_url,
+    github_repo,
   } = req.body;
 
   await getOrCreateSettings();
@@ -49,6 +50,7 @@ router.put("/", async (req, res) => {
       active_tournament_id: active_tournament_id ?? null,
       connection_mode: connection_mode ?? "local",
       public_url: public_url ?? null,
+      github_repo: github_repo ?? null,
     })
     .where(eq(appSettingsTable.id, 1))
     .returning();
