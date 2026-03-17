@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "plh37NNtr_fe60mAKkgyG"
+uri = "file://artifacts/slalom-stream/public/slalomstream-source.tar.gz"
+type = "unspecified"
+title = "SlalomStream Source Code"
