@@ -31,7 +31,7 @@ fi
 echo "[SlalomStream] Starting on port $PORT..."
 
 while true; do
-  node artifacts/api-server/dist/index.js
+  node artifacts/api-server/dist/index.cjs
   EXIT_CODE=$?
   if [ "$EXIT_CODE" -eq 42 ]; then
     echo ""

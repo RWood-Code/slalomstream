@@ -28,7 +28,7 @@ if (-not $env:DATABASE_URL) {
 Write-Host "[SlalomStream] Starting on port $($env:PORT)..."
 
 while ($true) {
-    node artifacts/api-server/dist/index.js
+    node artifacts/api-server/dist/index.cjs
     $exitCode = $LASTEXITCODE
 
     if ($exitCode -eq 42) {
