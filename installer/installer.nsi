@@ -13,7 +13,7 @@ Unicode True
 InstallDir "$PROGRAMFILES64\SlalomStream"
 InstallDirRegKey HKLM "Software\SlalomStream" "InstallDir"
 RequestExecutionLevel admin
-SetCompressor /SOLID lzma
+SetCompressor lzma
 
 !include "MUI2.nsh"
 !include "nsDialogs.nsh"
