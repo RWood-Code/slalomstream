@@ -43,6 +43,12 @@ interface GitHubRelease {
   html_url: string;
 }
 
+// ─── GET /api/update/version ─────────────────────────────────────────────────
+router.get("/version", (_req, res) => {
+  const local = readVersionFile();
+  res.json({ version: local.version });
+});
+
 // ─── GET /api/update/check ────────────────────────────────────────────────────
 router.get("/check", async (_req, res) => {
   const local = readVersionFile();

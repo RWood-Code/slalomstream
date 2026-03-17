@@ -1004,6 +1004,7 @@ function UpdatePanel() {
   });
 
   const [repoInput, setRepoInput] = useState('');
+  const [installedVersion, setInstalledVersion] = useState<string | null>(null);
   const [checkResult, setCheckResult] = useState<CheckResult | null>(null);
   const [isChecking, setIsChecking] = useState(false);
   const [applyStarted, setApplyStarted] = useState(false);
@@ -1014,6 +1015,13 @@ function UpdatePanel() {
   useEffect(() => {
     if (settings?.github_repo) setRepoInput(settings.github_repo);
   }, [settings]);
+
+  useEffect(() => {
+    fetch('/api/update/version')
+      .then(r => r.json() as Promise<{ version: string }>)
+      .then(d => setInstalledVersion(d.version))
+      .catch(() => { /* ignore — version shown after check */ });
+  }, []);
 
   useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
 
@@ -1043,12 +1051,17 @@ function UpdatePanel() {
   };
 
   const applyUpdate = async () => {
-    setApplyStarted(true);
     setLogContent('');
-    await fetch('/api/update/apply', {
+    const resp = await fetch('/api/update/apply', {
       method: 'POST',
       headers: adminToken ? { 'X-Admin-Token': adminToken } : {},
     });
+    if (!resp.ok) {
+      const data = await resp.json() as { error?: string };
+      toast({ title: 'Update failed', description: data.error ?? 'Unexpected error', variant: 'destructive' });
+      return;
+    }
+    setApplyStarted(true);
 
     intervalRef.current = setInterval(async () => {
       try {
@@ -1095,7 +1108,9 @@ function UpdatePanel() {
       <div className="p-5 space-y-4">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <span className="font-medium text-foreground">Current version:</span>
-          <code className="bg-muted px-2 py-0.5 rounded font-mono text-xs">{checkResult?.current ?? 'unknown'}</code>
+          <code className="bg-muted px-2 py-0.5 rounded font-mono text-xs">
+            {checkResult?.current ?? installedVersion ?? '…'}
+          </code>
           {checkResult?.status === 'update_available' && (
             <span className="text-muted-foreground">→</span>
           )}
