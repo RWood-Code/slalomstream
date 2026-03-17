@@ -1,8 +1,9 @@
 import { Router } from "express";
 import { spawn } from "child_process";
-import { existsSync, readFileSync, readSync, openSync, closeSync, fstatSync, writeFileSync, appendFileSync, mkdirSync, rmSync, cpSync, readdirSync } from "fs";
+import { existsSync, readFileSync, readSync, openSync, closeSync, fstatSync, writeFileSync, appendFileSync, mkdirSync, rmSync, cpSync, readdirSync, createWriteStream } from "fs";
 import path from "path";
 import os from "os";
+import { pipeline } from "stream/promises";
 import multer from "multer";
 import AdmZip from "adm-zip";
 import { isValidAdminSession } from "./settings.js";
@@ -322,9 +323,45 @@ function copyDir(src: string, dest: string) {
   cpSync(src, dest, { recursive: true, force: true });
 }
 
+/** Extract a ZIP from a temp file path, validate it, and store it as pendingZip. Returns scan result or throws. */
+async function scanAndStorePendingZip(tempZipPath: string): Promise<{ version: string; currentVersion: string; hasApiDist: boolean; hasFrontendDist: boolean; ready: boolean }> {
+  const extractDir = path.join(os.tmpdir(), `slalom-zip-${Date.now()}`);
+
+  const zip = new AdmZip(tempZipPath);
+  zip.extractAllTo(extractDir, true);
+
+  const wsRoot = findExtractedRoot(extractDir);
+  if (!wsRoot) {
+    rmSync(extractDir, { recursive: true, force: true });
+    throw Object.assign(new Error("This doesn't look like a SlalomStream ZIP — could not find version.json."), { statusCode: 422 });
+  }
+
+  let version = "unknown";
+  try {
+    const vf = JSON.parse(readFileSync(path.join(wsRoot, "version.json"), "utf-8"));
+    version = vf.version ?? "unknown";
+  } catch { /* unknown is fine */ }
+
+  const hasApiDist      = existsSync(path.join(wsRoot, "artifacts", "api-server",   "dist", "index.cjs"));
+  const hasFrontendDist = existsSync(path.join(wsRoot, "artifacts", "slalom-stream", "dist", "index.html"));
+
+  if (!hasApiDist && !hasFrontendDist) {
+    rmSync(extractDir, { recursive: true, force: true });
+    throw Object.assign(new Error("The ZIP does not contain any built files (dist directories are missing)."), { statusCode: 422 });
+  }
+
+  if (pendingZip) {
+    try { rmSync(pendingZip.extractedRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+
+  pendingZip = { tempPath: tempZipPath, extractedRoot: wsRoot, version, hasApiDist, hasFrontendDist, uploadedAt: Date.now() };
+
+  const currentVersion = readVersionFile().version;
+  return { version, currentVersion, hasApiDist, hasFrontendDist, ready: true };
+}
+
 // POST /api/update/upload  — receive ZIP, scan contents, return preview
 router.post("/upload", (req, res, next) => {
-  // Auth check before touching the file
   const token = req.headers["x-admin-token"] as string | undefined;
   if (!isValidAdminSession(token)) {
     return res.status(401).json({ error: "Admin authentication required." });
@@ -332,51 +369,59 @@ router.post("/upload", (req, res, next) => {
   next();
 }, zipUpload.single("file"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded." });
+  try {
+    const result = await scanAndStorePendingZip(req.file.path);
+    res.json(result);
+  } catch (err: any) {
+    const status = (err as any).statusCode ?? 500;
+    res.status(status).json({ error: err.message ?? "Failed to read ZIP" });
+  }
+});
 
-  const tempZipPath = req.file.path;
-  const extractDir  = path.join(os.tmpdir(), `slalom-zip-${Date.now()}`);
+// POST /api/update/fetch  — server fetches ZIP from configured download URL, scans, returns preview
+router.post("/fetch", async (req, res) => {
+  const token = req.headers["x-admin-token"] as string | undefined;
+  if (!isValidAdminSession(token)) {
+    return res.status(401).json({ error: "Admin authentication required." });
+  }
+
+  // Read download URL from settings
+  let downloadUrl = "";
+  try {
+    const { db } = await import("@workspace/db");
+    const { appSettingsTable } = await import("@workspace/db");
+    const { eq } = await import("drizzle-orm");
+    const [settings] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.id, 1));
+    downloadUrl = settings?.update_download_url ?? "";
+  } catch {
+    return res.status(500).json({ error: "Could not read settings from database." });
+  }
+
+  if (!downloadUrl) {
+    return res.status(400).json({ error: "No update download URL is configured. Set one in Admin → Software Update first." });
+  }
+
+  const tempZipPath = path.join(os.tmpdir(), `slalom-fetch-${Date.now()}.zip`);
 
   try {
-    // Extract
-    const zip = new AdmZip(tempZipPath);
-    zip.extractAllTo(extractDir, true);
-
-    // Find workspace root
-    const wsRoot = findExtractedRoot(extractDir);
-    if (!wsRoot) {
-      rmSync(extractDir, { recursive: true, force: true });
-      return res.status(422).json({ error: "This doesn't look like a SlalomStream ZIP — could not find version.json. Make sure you download the full project from Replit (⋮ → Download as ZIP)." });
+    const response = await fetch(downloadUrl, { redirect: "follow" });
+    if (!response.ok) {
+      return res.status(502).json({ error: `Download failed: server returned HTTP ${response.status}. Check the download URL is correct and publicly accessible.` });
+    }
+    if (!response.body) {
+      return res.status(502).json({ error: "No response body from download URL." });
     }
 
-    // Read version
-    let version = "unknown";
-    try {
-      const vf = JSON.parse(readFileSync(path.join(wsRoot, "version.json"), "utf-8"));
-      version = vf.version ?? "unknown";
-    } catch { /* unknown version is fine */ }
+    // Stream to temp file
+    const fileStream = createWriteStream(tempZipPath);
+    await pipeline(response.body as any, fileStream);
 
-    const hasApiDist      = existsSync(path.join(wsRoot, "artifacts", "api-server",   "dist", "index.cjs"));
-    const hasFrontendDist = existsSync(path.join(wsRoot, "artifacts", "slalom-stream", "dist", "index.html"));
-
-    if (!hasApiDist && !hasFrontendDist) {
-      rmSync(extractDir, { recursive: true, force: true });
-      return res.status(422).json({
-        error: "The ZIP does not contain any built files (dist directories are missing). Open the project in Replit, run a build first, then download the ZIP.",
-      });
-    }
-
-    // Discard any previous pending ZIP
-    if (pendingZip) {
-      try { rmSync(pendingZip.extractedRoot, { recursive: true, force: true }); } catch { /* ignore */ }
-    }
-
-    pendingZip = { tempPath: tempZipPath, extractedRoot: wsRoot, version, hasApiDist, hasFrontendDist, uploadedAt: Date.now() };
-
-    const currentVersion = readVersionFile().version;
-    res.json({ version, currentVersion, hasApiDist, hasFrontendDist, ready: true });
+    const result = await scanAndStorePendingZip(tempZipPath);
+    res.json(result);
   } catch (err: any) {
-    try { rmSync(extractDir, { recursive: true, force: true }); } catch { /* ignore */ }
-    res.status(500).json({ error: `Failed to read ZIP: ${err.message}` });
+    try { rmSync(tempZipPath, { force: true }); } catch { /* ignore */ }
+    const status = (err as any).statusCode ?? 502;
+    res.status(status).json({ error: err.message ?? "Failed to fetch update" });
   }
 });
 

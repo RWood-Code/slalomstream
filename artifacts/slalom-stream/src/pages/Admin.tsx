@@ -1080,13 +1080,14 @@ function UpdatePanel() {
   const [installedVersion, setInstalledVersion] = useState<string | null>(null);
   const [downloadUrlInput, setDownloadUrlInput] = useState('');
 
-  // ZIP upload state
-  type ZipStatus = 'idle' | 'uploading' | 'scanned' | 'applying';
+  // ZIP upload/fetch state
+  type ZipStatus = 'idle' | 'uploading' | 'fetching' | 'scanned' | 'applying';
   interface ZipScanResult { version: string; currentVersion: string; hasApiDist: boolean; hasFrontendDist: boolean }
   const [zipStatus, setZipStatus]         = useState<ZipStatus>('idle');
   const [zipScan, setZipScan]             = useState<ZipScanResult | null>(null);
   const [zipError, setZipError]           = useState<string | null>(null);
   const [zipRestarting, setZipRestarting] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const zipInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -1108,6 +1109,48 @@ function UpdatePanel() {
     });
     refetchSettings();
     toast({ title: 'Download URL saved' });
+  };
+
+  const downloadZip = async () => {
+    setIsDownloading(true);
+    try {
+      const res = await fetch('/api/update/download');
+      if (!res.ok) {
+        const data = await res.json() as { error?: string };
+        toast({ title: 'Download failed', description: data.error ?? `HTTP ${res.status}`, variant: 'destructive' });
+        return;
+      }
+      const blob = await res.blob();
+      const versionMatch = installedVersion ?? 'latest';
+      const filename = `slalomstream-v${versionMatch}.zip`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      toast({ title: 'Download failed', description: err.message ?? 'Unknown error', variant: 'destructive' });
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
+  const fetchUpdate = async () => {
+    setZipStatus('fetching');
+    setZipError(null);
+    setZipScan(null);
+    try {
+      const res = await fetch('/api/update/fetch', {
+        method: 'POST',
+        headers: adminToken ? { 'X-Admin-Token': adminToken } : {},
+      });
+      const data = await res.json();
+      if (!res.ok) { setZipError(data.error ?? 'Fetch failed'); setZipStatus('idle'); return; }
+      setZipScan(data as ZipScanResult);
+      setZipStatus('scanned');
+    } catch (err: any) {
+      setZipError(err.message ?? 'Fetch failed');
+      setZipStatus('idle');
+    }
   };
 
   const uploadZip = async (file: File) => {
@@ -1202,60 +1245,37 @@ function UpdatePanel() {
               Save
             </Button>
           </div>
-          {downloadUrl && (
-            <a
-              href={downloadUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline mt-1"
+          {/* Download + self-host helpers */}
+          <div className="flex flex-wrap gap-2 mt-1">
+            <Button
+              variant="outline"
+              className="h-8 text-xs gap-1.5"
+              onClick={downloadZip}
+              isLoading={isDownloading}
+              disabled={isDownloading}
             >
-              <ExternalLink className="w-3.5 h-3.5" />
-              Open download location →
-            </a>
-          )}
-
-          {/* Auto-use this app as the source */}
-          <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-xl">
-            <p className="text-xs font-semibold text-blue-900 dark:text-blue-200 mb-1">Use this published app as the download source</p>
-            <p className="text-xs text-blue-700 dark:text-blue-300 mb-2">
-              When this app is published online, it can serve its own update ZIP automatically — no Google Drive needed. Every time you republish, the ZIP is regenerated from the latest build.
-            </p>
-            <div className="flex gap-2 items-center flex-wrap">
-              <code className="text-[11px] font-mono bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-200 px-2 py-1 rounded flex-1 min-w-0 truncate">
-                {thisAppDownloadUrl}
-              </code>
+              <Download className="w-3.5 h-3.5" />
+              Download update ZIP
+            </Button>
+            {downloadUrl !== thisAppDownloadUrl && (
               <Button
                 variant="outline"
-                className="h-7 text-xs gap-1.5 shrink-0 border-blue-300 dark:border-blue-700 text-blue-800 dark:text-blue-200 hover:bg-blue-100 dark:hover:bg-blue-900/40"
+                className="h-8 text-xs gap-1.5 text-blue-700 dark:text-blue-300 border-blue-300 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/40"
                 onClick={useThisAppAsSource}
               >
                 <CheckCircle2 className="w-3.5 h-3.5" />
-                Use this URL
+                Use this app as update source
               </Button>
-            </div>
+            )}
           </div>
+          <p className="text-xs text-muted-foreground">
+            <strong>Download update ZIP</strong> saves the current build to your device for distribution. <strong>Use this app as update source</strong> sets the download URL to this app's own endpoint — venues can then fetch updates automatically without any file handling.
+          </p>
         </div>
 
         {/* ── ZIP Upload ───────────────────────────────────────────────── */}
         <div className="space-y-3 border-t pt-4">
           <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Apply Update ZIP</p>
-
-          {/* Steps */}
-          <div className="text-xs text-muted-foreground bg-muted/40 rounded-xl p-3 space-y-1.5">
-            {[
-              downloadUrl
-                ? <>Click <strong>Open download location</strong> above, download the ZIP file to this device.</>
-                : <>Download the latest ZIP from wherever it has been shared (Google Drive, Dropbox, USB, etc.).</>,
-              <>Click <strong>Upload ZIP file</strong> below and select the downloaded file.</>,
-              <>Review the version shown, then click <strong>Apply Update</strong>.</>,
-              <>The server restarts automatically — this page reloads when it&apos;s back.</>,
-            ].map((step, i) => (
-              <div key={i} className="flex gap-2.5 items-start">
-                <span className="w-4 h-4 rounded-full bg-primary/10 text-primary text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
-                <p>{step}</p>
-              </div>
-            ))}
-          </div>
 
           {zipRestarting ? (
             <div className="flex items-center gap-3 p-4 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl border border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 text-sm font-semibold">
@@ -1267,6 +1287,33 @@ function UpdatePanel() {
             </div>
           ) : (
             <>
+              {/* Auto-fetch when download URL is configured */}
+              {downloadUrl && (
+                <div className="p-3 bg-primary/5 border border-primary/20 rounded-xl space-y-2">
+                  <p className="text-xs font-semibold">Automatic update</p>
+                  <p className="text-xs text-muted-foreground">Fetch and prepare the update directly from the configured download URL — no file download or upload needed.</p>
+                  <Button
+                    variant="primary"
+                    onClick={fetchUpdate}
+                    disabled={zipStatus === 'fetching' || zipStatus === 'uploading' || zipStatus === 'applying'}
+                    isLoading={zipStatus === 'fetching'}
+                    className="h-9 gap-2 w-full"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    {zipStatus === 'fetching' ? 'Downloading update…' : 'Fetch & prepare update'}
+                  </Button>
+                </div>
+              )}
+
+              {/* Divider when both options available */}
+              {downloadUrl && (
+                <div className="flex items-center gap-2">
+                  <div className="h-px flex-1 bg-border" />
+                  <span className="text-[10px] text-muted-foreground uppercase tracking-widest">or upload manually</span>
+                  <div className="h-px flex-1 bg-border" />
+                </div>
+              )}
+
               <input
                 ref={zipInputRef}
                 type="file"
@@ -1278,7 +1325,7 @@ function UpdatePanel() {
                 <Button
                   variant="outline"
                   onClick={() => zipInputRef.current?.click()}
-                  disabled={zipStatus === 'uploading' || zipStatus === 'applying'}
+                  disabled={zipStatus === 'uploading' || zipStatus === 'fetching' || zipStatus === 'applying'}
                   isLoading={zipStatus === 'uploading'}
                   className="flex items-center gap-2 flex-1"
                 >
