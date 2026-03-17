@@ -77,8 +77,9 @@ cp -r "$WORKSPACE_ROOT/artifacts/slalom-stream/dist" \
 # Version file
 cp "$WORKSPACE_ROOT/version.json" "$STAGE_DIR/version.json"
 
-# Startup batch file
-cp "$SCRIPT_DIR/SlalomStream.bat" "$STAGE_DIR/SlalomStream.bat"
+# Startup batch files
+cp "$SCRIPT_DIR/SlalomStream.bat"        "$STAGE_DIR/SlalomStream.bat"
+cp "$SCRIPT_DIR/SlalomStream-Launch.bat" "$STAGE_DIR/SlalomStream-Launch.bat"
 
 echo "  App files staged."
 
@@ -118,7 +119,12 @@ echo "  node.exe staged (${NODE_SIZE})"
 echo ""
 echo "━━━ Step 4: Compile installer ━━━━━━━━━━━━━━━━━"
 cd "$SCRIPT_DIR"
-makensis -V2 installer.nsi
+# Use nix-shell to ensure a working makensis (the system PATH version may segfault)
+MAKENSIS_BIN=$(find /nix/store -maxdepth 2 -name "makensis" -path "*/nsis-*/bin/makensis" 2>/dev/null | head -1)
+if [ -z "$MAKENSIS_BIN" ]; then
+  MAKENSIS_BIN="makensis"
+fi
+"$MAKENSIS_BIN" -V2 installer.nsi
 
 OUTPUT="$WORKSPACE_ROOT/SlalomStream-Setup.exe"
 SIZE=$(du -sh "$OUTPUT" | cut -f1)

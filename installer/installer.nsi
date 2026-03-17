@@ -21,7 +21,7 @@ SetCompressor /SOLID lzma
 
 ; ── MUI Settings ──────────────────────────────────────────────────────────────
 !define MUI_ABORTWARNING
-!define MUI_FINISHPAGE_RUN          "$INSTDIR\SlalomStream.bat"
+!define MUI_FINISHPAGE_RUN          "$INSTDIR\SlalomStream-Launch.bat"
 !define MUI_FINISHPAGE_RUN_TEXT     "Launch SlalomStream now"
 !define MUI_FINISHPAGE_SHOWREADME   ""
 !define MUI_WELCOMEPAGE_TEXT        "This wizard will install SlalomStream on this computer.$\r$\n$\r$\nSlalomStream runs as a local server. Once installed, judges and scoreboard screens on any device connected to the same WiFi can access it via a web browser.$\r$\n$\r$\nClick Next to continue."
@@ -100,19 +100,21 @@ FunctionEnd
 Section "SlalomStream" SecMain
   SectionIn RO
 
-  ; ── Node.js runtime ──
+  ; ── Node.js runtime + scripts ──
   SetOutPath "$INSTDIR"
   File "stage/node.exe"
   File "stage/version.json"
   File "stage/SlalomStream.bat"
+  File "stage/SlalomStream-Launch.bat"
 
   ; ── API server bundle ──
   SetOutPath "$INSTDIR\artifacts\api-server\dist"
   File "stage/api-server/index.cjs"
 
-  ; ── Frontend static files (dist/public) ──
-  SetOutPath "$INSTDIR\artifacts\slalom-stream\dist"
-  File /r "stage/slalom-stream-dist/"
+  ; ── Frontend static files ──
+  ; Vite builds to dist/public — copy the whole public tree
+  SetOutPath "$INSTDIR\artifacts\slalom-stream\dist\public"
+  File /r "stage/slalom-stream-dist/public/"
 
   ; ── Write slalomstream.conf ──
   SetOutPath "$INSTDIR"
@@ -121,16 +123,23 @@ Section "SlalomStream" SecMain
   FileWrite $0 "PORT=$PortNum$\r$\n"
   FileClose $0
 
-  ; ── Desktop shortcut ──
-  CreateShortcut "$DESKTOP\SlalomStream.lnk" \
-    "$INSTDIR\SlalomStream.bat" "" "" 0 SW_SHOWNORMAL \
-    "" "Start the SlalomStream local server"
+  ; ── Shortcuts — use SetShellVarContext all so shortcuts appear for every user
+  ;    (without this, admin-elevation installs put shortcuts on the admin desktop)
+  SetShellVarContext all
 
-  ; ── Start Menu ──
+  ; Desktop shortcut → launcher (opens server + browser automatically)
+  CreateShortcut "$DESKTOP\SlalomStream.lnk" \
+    "$INSTDIR\SlalomStream-Launch.bat" "" "" 0 SW_SHOWNORMAL \
+    "" "Start SlalomStream and open in browser"
+
+  ; Start Menu
   CreateDirectory "$SMPROGRAMS\SlalomStream"
   CreateShortcut "$SMPROGRAMS\SlalomStream\SlalomStream.lnk" \
+    "$INSTDIR\SlalomStream-Launch.bat" "" "" 0 SW_SHOWNORMAL \
+    "" "Start SlalomStream and open in browser"
+  CreateShortcut "$SMPROGRAMS\SlalomStream\SlalomStream Server (console).lnk" \
     "$INSTDIR\SlalomStream.bat" "" "" 0 SW_SHOWNORMAL \
-    "" "Start the SlalomStream local server"
+    "" "Start SlalomStream server (shows console window)"
   CreateShortcut "$SMPROGRAMS\SlalomStream\Uninstall SlalomStream.lnk" \
     "$INSTDIR\Uninstall.exe"
 
@@ -148,6 +157,7 @@ SectionEnd
 
 ; ── Uninstall section ─────────────────────────────────────────────────────────
 Section "Uninstall"
+  SetShellVarContext all
   RMDir /r "$INSTDIR"
   Delete   "$DESKTOP\SlalomStream.lnk"
   RMDir /r "$SMPROGRAMS\SlalomStream"
