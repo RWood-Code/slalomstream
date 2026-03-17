@@ -18,7 +18,14 @@ if (Number.isNaN(port) || port <= 0) {
 
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
-  runStartupChecks().then(() => {
-    startSurePathClient().catch(err => console.error("[SurePath] Startup error:", err));
-  });
+  runStartupChecks()
+    .then(() => {
+      startSurePathClient().catch(err => console.error("[SurePath] Startup error:", err));
+    })
+    .catch(err => {
+      console.error("[DB] Startup checks failed — database may not be configured correctly.");
+      console.error("[DB]", err instanceof Error ? err.message : String(err));
+      console.error("[DB] The server will continue running but database features will not work.");
+      console.error("[DB] Check DATABASE_URL in slalomstream.conf and restart.");
+    });
 });
