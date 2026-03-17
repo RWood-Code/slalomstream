@@ -52,7 +52,7 @@ export default function Home() {
     });
   };
 
-  const liveTournaments = tournaments?.filter(t => !t.is_test) ?? [];
+  const liveTournaments = tournaments?.filter(t => !t.is_test && t.status !== 'archived') ?? [];
   const testTournaments = tournaments?.filter(t => t.is_test) ?? [];
   const displayed = showTest ? tournaments ?? [] : liveTournaments;
 

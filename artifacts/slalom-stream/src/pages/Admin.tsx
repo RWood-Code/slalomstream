@@ -6,6 +6,7 @@ import {
   Settings, Shield, UserPlus, Radio, CheckCircle2, XCircle, Copy, RefreshCw,
   Trash2, Key, Waves, Plug, PlugZap, Download, Globe, AlertCircle,
   ChevronDown, ChevronUp, Eye, EyeOff, Wand2, ShieldCheck, Wifi,
+  Archive, RotateCcw, Pencil,
 } from 'lucide-react';
 import { useQueryClient, useQuery, useMutation } from '@tanstack/react-query';
 import { DIVISIONS, JUDGE_ROLES } from '@/lib/utils';
@@ -126,6 +127,7 @@ export default function Admin() {
         <AppSettingsPanel />
         <SurePathPanel />
         <OfficialsPinsPanel />
+        <TournamentArchive />
       </div>
 
       {/* Tournament-specific */}
@@ -136,6 +138,7 @@ export default function Admin() {
       ) : (
         <div className="space-y-2">
           <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground px-1 pt-2">Tournament</p>
+          <ScoreCorrections tournamentId={activeTournamentId} />
           <EmsImportPanel tournamentId={activeTournamentId} />
           <SkierManagement tournamentId={activeTournamentId} />
           <JudgeManagement tournamentId={activeTournamentId} />
@@ -974,6 +977,305 @@ function EmsImportPanel({ tournamentId }: { tournamentId: number }) {
             </Button>
           </div>
         )}
+      </div>
+    </AdminSection>
+  );
+}
+
+// ─── Tournament Archive ────────────────────────────────────────────────────────
+function TournamentArchive() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  const { data: tournaments } = useQuery({
+    queryKey: ['/api/tournaments', 'archive-panel'],
+    queryFn: async () => {
+      const res = await fetch('/api/tournaments');
+      if (!res.ok) throw new Error('Failed to load');
+      return res.json() as Promise<{ id: number; name: string; status: string; is_test: boolean }[]>;
+    },
+  });
+
+  const archiveMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: number; status: string }) => {
+      const res = await fetch(`/api/tournaments/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/tournaments'] });
+    },
+  });
+
+  const active = tournaments?.filter(t => t.status !== 'archived' && !t.is_test) ?? [];
+  const archived = tournaments?.filter(t => t.status === 'archived') ?? [];
+
+  const statusBadge = (t: { status: string }) => {
+    if (t.status === 'active') return <Badge variant="success" className="text-[10px]">Active</Badge>;
+    if (t.status === 'completed') return <Badge variant="outline" className="text-[10px]">Completed</Badge>;
+    return <Badge variant="warning" className="text-[10px]">Upcoming</Badge>;
+  };
+
+  const archivedBadge = archived.length > 0
+    ? <Badge variant="outline" className="text-xs">{archived.length} archived</Badge>
+    : undefined;
+
+  return (
+    <AdminSection
+      icon={<Archive className="w-4 h-4" />}
+      title="Tournament Archive"
+      subtitle="Close out completed events and hide them from the home screen"
+      badge={archivedBadge}
+    >
+      <div className="p-5 space-y-5">
+        {active.length > 0 && (
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">Active & Upcoming</p>
+            <div className="border rounded-xl overflow-hidden">
+              <table className="w-full text-sm text-left">
+                <tbody className="divide-y">
+                  {active.map(t => (
+                    <tr key={t.id} className="hover:bg-muted/50">
+                      <td className="px-4 py-3 font-semibold">{t.name}</td>
+                      <td className="px-4 py-3">{statusBadge(t)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          variant="outline"
+                          className="h-7 text-xs gap-1.5"
+                          isLoading={archiveMutation.isPending && (archiveMutation.variables as any)?.id === t.id}
+                          onClick={() =>
+                            archiveMutation.mutate(
+                              { id: t.id, status: 'archived' },
+                              { onSuccess: () => toast({ title: `${t.name} archived` }) }
+                            )
+                          }
+                        >
+                          <Archive className="w-3 h-3" /> Archive
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {archived.length > 0 && (
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">Archived</p>
+            <div className="border rounded-xl overflow-hidden">
+              <table className="w-full text-sm text-left">
+                <tbody className="divide-y">
+                  {archived.map(t => (
+                    <tr key={t.id} className="hover:bg-muted/50 text-muted-foreground">
+                      <td className="px-4 py-3 font-medium">{t.name}</td>
+                      <td className="px-4 py-3">
+                        <Badge variant="outline" className="text-[10px] text-muted-foreground">Archived</Badge>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          variant="ghost"
+                          className="h-7 text-xs gap-1.5"
+                          isLoading={archiveMutation.isPending && (archiveMutation.variables as any)?.id === t.id}
+                          onClick={() =>
+                            archiveMutation.mutate(
+                              { id: t.id, status: 'completed' },
+                              { onSuccess: () => toast({ title: `${t.name} restored` }) }
+                            )
+                          }
+                        >
+                          <RotateCcw className="w-3 h-3" /> Restore
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {(!tournaments || (active.length === 0 && archived.length === 0)) && (
+          <p className="text-center text-muted-foreground text-sm py-4">No tournaments yet.</p>
+        )}
+      </div>
+    </AdminSection>
+  );
+}
+
+// ─── Score Corrections ─────────────────────────────────────────────────────────
+const SCORE_OPTIONS = ['0', '0.5', '1', '1.5', '2', '2.5', '3', '3.5', '4', '4.5', '5', '5.5', '6', '6_no_gates'];
+
+type PassRow = { id: number; skier_name: string; round_number: number; rope_length: number; buoys_scored: number | null; status: string };
+type JudgeScoreRow = { id: number; pass_id: number; judge_role: string; judge_name: string; pass_score: string };
+
+function ScoreCorrections({ tournamentId }: { tournamentId: number }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  const { data: passes } = useQuery({
+    queryKey: ['/api/tournaments', tournamentId, 'passes'],
+    queryFn: async () => {
+      const res = await fetch(`/api/tournaments/${tournamentId}/passes`);
+      if (!res.ok) throw new Error('Failed');
+      return res.json() as Promise<PassRow[]>;
+    },
+  });
+
+  const [expandedPass, setExpandedPass] = useState<number | null>(null);
+  const [editingBuoys, setEditingBuoys] = useState<Record<number, string>>({});
+
+  const { data: judgeScores } = useQuery({
+    queryKey: ['/api/passes', expandedPass, 'judge-scores'],
+    queryFn: async () => {
+      const res = await fetch(`/api/passes/${expandedPass}/judge-scores`);
+      if (!res.ok) throw new Error('Failed');
+      return res.json() as Promise<JudgeScoreRow[]>;
+    },
+    enabled: expandedPass !== null,
+  });
+
+  const saveBuoys = async (passId: number) => {
+    const val = editingBuoys[passId];
+    if (val === undefined || val === '') return;
+    const res = await fetch(`/api/passes/${passId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ buoys_scored: parseFloat(val), status: 'complete' }),
+    });
+    if (res.ok) {
+      queryClient.invalidateQueries({ queryKey: ['/api/tournaments', tournamentId, 'passes'] });
+      setEditingBuoys(prev => { const n = { ...prev }; delete n[passId]; return n; });
+      toast({ title: 'Score updated' });
+    }
+  };
+
+  const updateJudgeScore = async (passId: number, scoreId: number, pass_score: string) => {
+    const res = await fetch(`/api/passes/${passId}/judge-scores/${scoreId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pass_score }),
+    });
+    if (res.ok) {
+      queryClient.invalidateQueries({ queryKey: ['/api/passes', expandedPass, 'judge-scores'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/tournaments', tournamentId, 'passes'] });
+      toast({ title: 'Judge score corrected, re-collated' });
+    }
+  };
+
+  const sorted = [...(passes ?? [])].sort((a, b) => a.round_number - b.round_number || a.id - b.id);
+  const countBadge = <Badge variant="outline" className="text-xs">{sorted.length} passes</Badge>;
+
+  return (
+    <AdminSection
+      icon={<Pencil className="w-4 h-4" />}
+      title="Score Corrections"
+      subtitle="Override pass scores or correct individual judge scores"
+      badge={countBadge}
+    >
+      <div className="p-5">
+        <div className="border rounded-xl overflow-hidden">
+          <table className="w-full text-sm text-left">
+            <thead className="bg-muted text-muted-foreground uppercase text-[10px] font-bold tracking-wider">
+              <tr>
+                <th className="px-4 py-3">Skier</th>
+                <th className="px-4 py-3 hidden sm:table-cell">Rnd</th>
+                <th className="px-4 py-3 hidden sm:table-cell">Rope</th>
+                <th className="px-4 py-3">Score</th>
+                <th className="px-4 py-3"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {sorted.map(p => (
+                <React.Fragment key={p.id}>
+                  <tr className={`hover:bg-muted/50 ${expandedPass === p.id ? 'bg-primary/5' : ''}`}>
+                    <td className="px-4 py-3 font-semibold">{p.skier_name}</td>
+                    <td className="px-4 py-3 hidden sm:table-cell text-muted-foreground text-xs">{p.round_number}</td>
+                    <td className="px-4 py-3 hidden sm:table-cell text-muted-foreground text-xs">{p.rope_length}m</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          max="6"
+                          className="w-16 h-7 border rounded px-2 text-xs font-mono text-center bg-background"
+                          value={editingBuoys[p.id] ?? (p.buoys_scored ?? '')}
+                          onChange={e => setEditingBuoys(prev => ({ ...prev, [p.id]: e.target.value }))}
+                        />
+                        {editingBuoys[p.id] !== undefined && (
+                          <button
+                            onClick={() => saveBuoys(p.id)}
+                            className="text-xs text-primary font-bold hover:underline whitespace-nowrap"
+                          >
+                            Save
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        onClick={() => setExpandedPass(expandedPass === p.id ? null : p.id)}
+                        className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 ml-auto"
+                      >
+                        {expandedPass === p.id
+                          ? <ChevronUp className="w-3 h-3" />
+                          : <ChevronDown className="w-3 h-3" />}
+                        Judges
+                      </button>
+                    </td>
+                  </tr>
+                  {expandedPass === p.id && (
+                    <tr>
+                      <td colSpan={5} className="bg-muted/30 px-4 py-3">
+                        {!judgeScores ? (
+                          <p className="text-xs text-muted-foreground">Loading…</p>
+                        ) : judgeScores.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">No judge scores recorded for this pass.</p>
+                        ) : (
+                          <div>
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">
+                              Judge Scores — changing selection saves immediately
+                            </p>
+                            <div className="grid gap-2">
+                              {judgeScores.map(score => (
+                                <div key={score.id} className="flex items-center gap-3 text-xs">
+                                  <span className="w-20 font-semibold text-muted-foreground shrink-0">{score.judge_role}</span>
+                                  <span className="flex-1 text-muted-foreground truncate">{score.judge_name}</span>
+                                  <select
+                                    className="h-7 border rounded px-2 text-xs bg-background font-mono"
+                                    value={score.pass_score}
+                                    onChange={e => updateJudgeScore(p.id, score.id, e.target.value)}
+                                  >
+                                    {SCORE_OPTIONS.map(v => (
+                                      <option key={v} value={v}>{v === '6_no_gates' ? '6 (no gates)' : v}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              ))}
+              {sorted.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No passes recorded yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-xs text-muted-foreground mt-3">
+          Editing "Score" overrides the collated buoys count directly. Changing a judge score dropdown re-collates automatically.
+        </p>
       </div>
     </AdminSection>
   );

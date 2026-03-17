@@ -5,7 +5,7 @@ import {
   ChevronDown, ChevronUp, Radio, Shield, HelpCircle, Globe, GitBranch
 } from 'lucide-react';
 
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const RELEASE_DATE = 'March 2026';
 
 interface SectionProps {
@@ -62,9 +62,23 @@ interface ReleaseEntry {
 
 const RELEASES: ReleaseEntry[] = [
   {
-    version: '1.2.0',
+    version: '1.3.0',
     date: 'March 2026',
     current: true,
+    items: [
+      'Lite Mode — operator enters all scores directly on the Recording page; judge navigation hidden; no judge devices required for single-operator events',
+      'Instant Replay Slide Panel — slide-up panel with independent video player after recording stops; main camera stays live; playback speed controls (0.25×–2×); save to local folder',
+      'Pop-out Live View — fullscreen /live route with score/pass/tournament overlays; auto-starts camera from saved device ID; controls auto-hide after 3 seconds',
+      'Camera & Cam Link selector — device picker on Recording page; selected device persisted across sessions; hot-plug support; works with Elgato Cam Link 4K and similar capture devices',
+      'Save Location — File System Access API lets operator choose a save folder (Chrome/Edge); standard download fallback on other browsers',
+      'QR codes now embed tournament ID — judges landing on a fresh device go directly into the correct tournament without manual selection',
+      'Tournament Archive — admin can close out completed events; archived tournaments are hidden from the Home page tournament list',
+      'Score Corrections — admin panel to override collated pass scores and correct individual judge scores with automatic re-collation',
+    ],
+  },
+  {
+    version: '1.2.0',
+    date: 'March 2026',
     items: [
       'Connection Mode — toggle between Local WiFi and Cloud/Online in Admin; QR codes on the Recording page automatically use the correct address for each mode',
       'Cloud mode: judges connect via any network (mobile data, any WiFi) when the app is deployed online — no shared network required',
