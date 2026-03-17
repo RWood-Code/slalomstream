@@ -112,9 +112,10 @@ Section "SlalomStream" SecMain
   File "stage/api-server/index.cjs"
 
   ; ── Frontend static files ──
-  ; Vite builds to dist/public — copy the whole public tree
-  SetOutPath "$INSTDIR\artifacts\slalom-stream\dist\public"
-  File /r "stage/slalom-stream-dist/public/"
+  ; stage/slalom-stream-dist mirrors artifacts/slalom-stream/dist
+  ; (Vite outputs to dist/public, so the tree is slalom-stream-dist/public/…)
+  SetOutPath "$INSTDIR\artifacts\slalom-stream\dist"
+  File /r "stage/slalom-stream-dist/"
 
   ; ── Write slalomstream.conf ──
   SetOutPath "$INSTDIR"

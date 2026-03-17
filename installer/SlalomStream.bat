@@ -26,7 +26,7 @@ if not defined DATABASE_URL (
 )
 
 set SERVE_STATIC=true
-set STATIC_DIR=artifacts\slalom-stream\dist\public
+set STATIC_DIR=%~dp0artifacts\slalom-stream\dist\public
 set NODE_ENV=production
 
 echo  Starting on port %PORT%...
