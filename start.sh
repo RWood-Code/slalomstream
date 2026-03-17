@@ -16,7 +16,6 @@
 #   SERVE_STATIC  — set to "true" to serve the built frontend from this server
 #   STATIC_DIR    — path to built frontend (default: artifacts/slalom-stream/dist/public)
 
-set -e
 cd "$(dirname "$0")"
 
 export PORT="${PORT:-3000}"

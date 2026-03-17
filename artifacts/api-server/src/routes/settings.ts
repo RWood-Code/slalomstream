@@ -1,8 +1,32 @@
 import { Router } from "express";
+import { randomUUID } from "crypto";
 import { db } from "@workspace/db";
 import { appSettingsTable, officialsRegisterTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { startSurePathClient, stopSurePathClient } from "../services/surepath-client";
+
+// In-memory admin session tokens: token → expiry timestamp
+export const adminSessions = new Map<string, number>();
+
+function createAdminSession(): string {
+  const token = randomUUID();
+  // Token valid for 8 hours
+  adminSessions.set(token, Date.now() + 8 * 60 * 60 * 1000);
+  return token;
+}
+
+function pruneExpiredSessions(): void {
+  const now = Date.now();
+  for (const [token, expiry] of adminSessions) {
+    if (now > expiry) adminSessions.delete(token);
+  }
+}
+
+export function isValidAdminSession(token: string | undefined): boolean {
+  if (!token) return false;
+  pruneExpiredSessions();
+  return adminSessions.has(token);
+}
 
 const router = Router();
 
@@ -78,12 +102,13 @@ adminRouter.post("/verify-pin", async (req, res) => {
       .from(officialsRegisterTable)
       .where(and(eq(officialsRegisterTable.is_admin, true), eq(officialsRegisterTable.pin, String(pin))))
       .limit(1);
-    if (officialAdmin.length > 0) return res.json({ valid: true, admin_name: `${officialAdmin[0].first_name} ${officialAdmin[0].surname}` });
-    return res.json({ valid: true });
+    const token = createAdminSession();
+    if (officialAdmin.length > 0) return res.json({ valid: true, token, admin_name: `${officialAdmin[0].first_name} ${officialAdmin[0].surname}` });
+    return res.json({ valid: true, token });
   }
 
   // Check global admin PIN
-  if (settings.admin_pin === String(pin)) return res.json({ valid: true });
+  if (settings.admin_pin === String(pin)) return res.json({ valid: true, token: createAdminSession() });
 
   // Check official admin PINs
   const officialAdmin = await db
@@ -91,7 +116,7 @@ adminRouter.post("/verify-pin", async (req, res) => {
     .from(officialsRegisterTable)
     .where(and(eq(officialsRegisterTable.is_admin, true), eq(officialsRegisterTable.pin, String(pin))))
     .limit(1);
-  if (officialAdmin.length > 0) return res.json({ valid: true, admin_name: `${officialAdmin[0].first_name} ${officialAdmin[0].surname}` });
+  if (officialAdmin.length > 0) return res.json({ valid: true, token: createAdminSession(), admin_name: `${officialAdmin[0].first_name} ${officialAdmin[0].surname}` });
 
   res.status(401).json({ valid: false });
 });

@@ -70,7 +70,7 @@ function AdminSection({
 
 // ─── Admin entry / lock ────────────────────────────────────────────────────────
 export default function Admin() {
-  const { adminPinValid, setAdminPinValid, activeTournamentId } = useAppStore();
+  const { adminPinValid, setAdminPinValid, setAdminToken, activeTournamentId } = useAppStore();
   const [pinInput, setPinInput] = useState('');
   const { toast } = useToast();
   const verifyMutation = useVerifyAdminPin();
@@ -79,8 +79,9 @@ export default function Admin() {
     const handleLogin = (e: React.FormEvent) => {
       e.preventDefault();
       verifyMutation.mutate({ data: { pin: pinInput } }, {
-        onSuccess: (res) => {
+        onSuccess: (res: { valid: boolean; token?: string }) => {
           if (res.valid) {
+            if (res.token) setAdminToken(res.token);
             setAdminPinValid(true);
             toast({ title: 'Admin Access Granted' });
           } else {
@@ -985,16 +986,18 @@ function EmsImportPanel({ tournamentId }: { tournamentId: number }) {
 
 // ─── Software Update ───────────────────────────────────────────────────────────
 type CheckResult = {
-  status: 'up_to_date' | 'update_available' | 'no_repo' | 'no_releases' | 'error';
+  status: 'up_to_date' | 'update_available' | 'no_repo' | 'no_releases' | 'no_git' | 'no_remote' | 'error';
   current?: string;
   latest?: string;
   release_notes?: string | null;
   html_url?: string | null;
   error?: string;
+  message?: string;
 };
 
 function UpdatePanel() {
   const { toast } = useToast();
+  const { adminToken } = useAppStore();
   const { data: settings, refetch: refetchSettings } = useQuery({
     queryKey: ['app-settings'],
     queryFn: async () => { const res = await fetch('/api/settings'); return res.json(); },
@@ -1030,9 +1033,10 @@ function UpdatePanel() {
     setCheckResult(null);
     try {
       const res = await fetch('/api/update/check');
-      setCheckResult(await res.json());
-    } catch (err: any) {
-      setCheckResult({ status: 'error', error: err.message });
+      setCheckResult(await res.json() as CheckResult);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      setCheckResult({ status: 'error', error: message });
     } finally {
       setIsChecking(false);
     }
@@ -1041,7 +1045,10 @@ function UpdatePanel() {
   const applyUpdate = async () => {
     setApplyStarted(true);
     setLogContent('');
-    await fetch('/api/update/apply', { method: 'POST' });
+    await fetch('/api/update/apply', {
+      method: 'POST',
+      headers: adminToken ? { 'X-Admin-Token': adminToken } : {},
+    });
 
     intervalRef.current = setInterval(async () => {
       try {
@@ -1073,17 +1080,29 @@ function UpdatePanel() {
     : checkResult.status === 'update_available' ? <Badge variant="warning" className="text-xs">Update available: v{checkResult.latest}</Badge>
     : checkResult.status === 'no_repo'          ? <Badge variant="outline" className="text-xs text-muted-foreground">No repo configured</Badge>
     : checkResult.status === 'no_releases'      ? <Badge variant="outline" className="text-xs text-muted-foreground">No releases yet</Badge>
-    :                                             <Badge variant="destructive" className="text-xs">Error</Badge>
+    : checkResult.status === 'no_git'           ? <Badge variant="outline" className="text-xs text-amber-600">git not installed</Badge>
+    : checkResult.status === 'no_remote'        ? <Badge variant="outline" className="text-xs text-amber-600">No git remote</Badge>
+    :                                             <Badge variant="warning" className="text-xs">Error</Badge>
     : undefined;
 
   return (
     <AdminSection
       icon={<RefreshCw className="w-4 h-4" />}
       title="Software Update"
-      subtitle="Check for and apply updates from your GitHub repository"
+      subtitle={`Check for and apply updates from your GitHub repository`}
       badge={statusBadge}
     >
       <div className="p-5 space-y-4">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span className="font-medium text-foreground">Current version:</span>
+          <code className="bg-muted px-2 py-0.5 rounded font-mono text-xs">{checkResult?.current ?? 'unknown'}</code>
+          {checkResult?.status === 'update_available' && (
+            <span className="text-muted-foreground">→</span>
+          )}
+          {checkResult?.status === 'update_available' && (
+            <code className="bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded font-mono text-xs">v{checkResult.latest}</code>
+          )}
+        </div>
         <div>
           <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">GitHub Repository</p>
           <div className="flex gap-2">
@@ -1144,6 +1163,16 @@ function UpdatePanel() {
             <div>
               <p className="font-semibold">No repository configured</p>
               <p className="mt-0.5">Save a GitHub repository path above to enable update checking. The codebase must be a git clone of that repo.</p>
+            </div>
+          </div>
+        )}
+
+        {(checkResult?.status === 'no_git' || checkResult?.status === 'no_remote') && (
+          <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-700 text-xs text-amber-800 dark:text-amber-300">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold">{checkResult.status === 'no_git' ? 'git not available' : 'No git remote configured'}</p>
+              <p className="mt-0.5">{checkResult.message}</p>
             </div>
           </div>
         )}

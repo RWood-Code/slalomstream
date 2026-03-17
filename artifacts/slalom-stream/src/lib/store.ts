@@ -7,6 +7,9 @@ interface AppState {
   
   adminPinValid: boolean;
   setAdminPinValid: (valid: boolean) => void;
+
+  adminToken: string | null;
+  setAdminToken: (token: string | null) => void;
   
   activeJudgeId: number | null;
   activeJudgeRole: string | null;
@@ -24,13 +27,16 @@ export const useAppStore = create<AppState>()(
       
       adminPinValid: false,
       setAdminPinValid: (valid) => set({ adminPinValid: valid }),
+
+      adminToken: null,
+      setAdminToken: (token) => set({ adminToken: token }),
       
       activeJudgeId: null,
       activeJudgeRole: null,
       activeJudgeName: null,
       setJudgeSession: (id, role, name) => set({ activeJudgeId: id, activeJudgeRole: role, activeJudgeName: name }),
       
-      logout: () => set({ adminPinValid: false, activeJudgeId: null, activeJudgeRole: null, activeJudgeName: null }),
+      logout: () => set({ adminPinValid: false, adminToken: null, activeJudgeId: null, activeJudgeRole: null, activeJudgeName: null }),
     }),
     {
       name: 'slalom-stream-storage',

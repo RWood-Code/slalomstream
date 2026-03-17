@@ -219,6 +219,8 @@ export interface AdminPinRequest {
 
 export interface AdminPinResponse {
   valid: boolean;
+  token?: string;
+  admin_name?: string;
 }
 
 export interface AppSettings {
