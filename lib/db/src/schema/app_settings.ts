@@ -14,6 +14,7 @@ export const appSettingsTable = pgTable("app_settings", {
   connection_mode: text("connection_mode").notNull().default("local"),
   public_url: text("public_url"),
   github_repo: text("github_repo"),
+  update_download_url: text("update_download_url"),
 });
 
 export type AppSettings = typeof appSettingsTable.$inferSelect;
