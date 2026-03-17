@@ -6,7 +6,7 @@ import {
   Settings, Shield, UserPlus, Radio, CheckCircle2, XCircle, Copy, RefreshCw,
   Trash2, Key, Waves, Plug, PlugZap, Download, Globe, AlertCircle,
   ChevronDown, ChevronUp, Eye, EyeOff, Wand2, ShieldCheck, Wifi,
-  Archive, RotateCcw, Pencil,
+  Archive, RotateCcw, Pencil, ExternalLink, ClipboardPaste, ArrowRight, ListChecks,
 } from 'lucide-react';
 import { useQueryClient, useQuery, useMutation } from '@tanstack/react-query';
 import { DIVISIONS, JUDGE_ROLES } from '@/lib/utils';
@@ -824,19 +824,23 @@ interface EmsResult {
   details_url: string; participant_count: number; participants: EmsParticipant[];
 }
 
+const EMS_CALENDAR_URL = 'https://ems.iwwf.sport/?Country=NZL&Discipline=Waterski';
+const EMS_BASE_URL     = 'https://ems.iwwf.sport';
+
 function EmsImportPanel({ tournamentId }: { tournamentId: number }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const createSkier = useCreateSkier({ mutation: {} });
 
-  const [code, setCode] = useState('');
-  const [result, setResult] = useState<EmsResult | null>(null);
-  const [fetching, setFetching] = useState(false);
+  const [guideOpen, setGuideOpen]   = useState(false);
+  const [code, setCode]             = useState('');
+  const [result, setResult]         = useState<EmsResult | null>(null);
+  const [fetching, setFetching]     = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
-  const [fetchHint, setFetchHint] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [importing, setImporting] = useState(false);
-  const [imported, setImported] = useState<number>(0);
+  const [fetchHint, setFetchHint]   = useState<string | null>(null);
+  const [selected, setSelected]     = useState<Set<number>>(new Set());
+  const [importing, setImporting]   = useState(false);
+  const [imported, setImported]     = useState<number>(0);
 
   const fetchEms = async () => {
     if (!code.trim()) return;
@@ -887,75 +891,139 @@ function EmsImportPanel({ tournamentId }: { tournamentId: number }) {
     <AdminSection
       icon={<Globe className="w-4 h-4" />}
       title="Import from IWWF EMS"
-      subtitle="Bulk-import participants from ems.iwwf.sport using a tournament sanction code"
+      subtitle="Bulk-import registered participants straight from ems.iwwf.sport"
       borderClass="border-blue-200 dark:border-blue-900"
     >
-      <div className="p-5 space-y-4">
-        <div className="flex gap-2">
-          <div className="flex-1">
-            <Input
-              label="EMS Code or Competition URL"
-              placeholder="26NZL018  or  paste full ems.iwwf.sport URL"
-              value={code}
-              onChange={e => setCode(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') fetchEms(); }}
-            />
+      <div className="p-5 space-y-5">
+
+        {/* ── Step 1: Open EMS Calendar ──────────────────────────────── */}
+        <div className="rounded-xl border border-blue-200 dark:border-blue-800 overflow-hidden">
+          <div className="flex items-center gap-4 p-4 bg-blue-50 dark:bg-blue-950/40">
+            <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0">1</div>
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-sm text-blue-900 dark:text-blue-100">Open the IWWF EMS Calendar</p>
+              <p className="text-[11px] text-blue-600 dark:text-blue-400 mt-0.5">Find your tournament — pre-filtered to New Zealand waterski events</p>
+            </div>
+            <a
+              href={EMS_CALENDAR_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => setGuideOpen(true)}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition-colors"
+            >
+              Open EMS <ExternalLink className="w-3 h-3" />
+            </a>
           </div>
-          <div className="flex items-end">
-            <Button variant="primary" onClick={fetchEms} isLoading={fetching} disabled={!code.trim()} className="mb-0.5">
-              Search
-            </Button>
-          </div>
+
+          {/* Collapsible step guide */}
+          <button
+            onClick={() => setGuideOpen(o => !o)}
+            className="w-full flex items-center justify-between px-4 py-2 text-xs text-blue-700 dark:text-blue-300 hover:bg-blue-50/60 dark:hover:bg-blue-900/30 transition-colors border-t border-blue-100 dark:border-blue-800"
+          >
+            <span className="font-medium">How to get the competition URL</span>
+            {guideOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
+          {guideOpen && (
+            <div className="px-4 pb-4 pt-2 bg-blue-50/40 dark:bg-blue-950/20 border-t border-blue-100 dark:border-blue-800 space-y-3">
+              {[
+                { n: 1, icon: <ExternalLink className="w-3.5 h-3.5" />, text: <>Click <strong>Open EMS</strong> above — the NZL waterski calendar opens in a new tab.</> },
+                { n: 2, icon: <ArrowRight className="w-3.5 h-3.5" />, text: <>Find your tournament in the list and click its name to open the competition detail page.</> },
+                { n: 3, icon: <ClipboardPaste className="w-3.5 h-3.5" />, text: <>Copy the full URL from your browser's address bar. It will look like:<br /><code className="text-[10px] bg-blue-100 dark:bg-blue-900 px-1.5 py-0.5 rounded font-mono block mt-1 break-all">{EMS_BASE_URL}/Competitions/Details?Id=xxxxxxxx-xxxx-…</code></> },
+                { n: 4, icon: <ClipboardPaste className="w-3.5 h-3.5" />, text: <>Paste it into the field below and click <strong>Search</strong>. You can also type the sanction code (e.g. <strong>26NZL018</strong>) directly if you know it.</> },
+              ].map(step => (
+                <div key={step.n} className="flex gap-3 items-start">
+                  <div className="w-5 h-5 rounded-full bg-blue-200 dark:bg-blue-800 text-blue-700 dark:text-blue-300 flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">{step.n}</div>
+                  <p className="text-xs text-blue-800 dark:text-blue-200 leading-relaxed">{step.text}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
-        <p className="text-xs text-muted-foreground">
-          Enter a sanction code (e.g. <strong>26NZL018</strong>) or paste the full competition URL. Slalom participants are pre-selected.
-        </p>
-
-        {fetchError && (
-          <div className="space-y-2">
-            <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-              <span>{fetchError}</span>
+        {/* ── Step 2: Paste URL / sanction code ─────────────────────── */}
+        <div className="rounded-xl border border-border overflow-hidden">
+          <div className="flex items-center gap-3 px-4 py-3 bg-muted/40 border-b">
+            <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold text-sm shrink-0">2</div>
+            <div>
+              <p className="font-semibold text-sm">Paste the competition URL or sanction code</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">Slalom participants are automatically pre-selected</p>
             </div>
-            {fetchHint && (
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-xs">
-                <p className="font-bold mb-1">Tip:</p><p>{fetchHint}</p>
+          </div>
+          <div className="p-4 space-y-3">
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <Input
+                  placeholder="https://ems.iwwf.sport/Competitions/Details?Id=…  or  26NZL018"
+                  value={code}
+                  onChange={e => setCode(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') fetchEms(); }}
+                />
+              </div>
+              <div className="flex items-end">
+                <Button variant="primary" onClick={fetchEms} isLoading={fetching} disabled={!code.trim()}>
+                  Search
+                </Button>
+              </div>
+            </div>
+
+            {fetchError && (
+              <div className="space-y-2">
+                <div className="flex items-start gap-2 p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-lg text-red-700 dark:text-red-300 text-sm">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{fetchError}</span>
+                </div>
+                {fetchHint && (
+                  <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg text-amber-800 dark:text-amber-200 text-xs">
+                    <p className="font-bold mb-1">Tip</p>
+                    <p>{fetchHint}</p>
+                  </div>
+                )}
               </div>
             )}
           </div>
-        )}
+        </div>
 
+        {/* ── Step 3: Review & import ────────────────────────────────── */}
         {result && (
-          <div className="space-y-4">
-            <div className="p-3 bg-blue-50 dark:bg-blue-950/30 rounded-xl border border-blue-100 dark:border-blue-900">
-              <p className="font-bold text-sm text-blue-900 dark:text-blue-100">{result.name}</p>
-              <div className="flex flex-wrap gap-3 mt-1 text-xs text-blue-700 dark:text-blue-300">
-                {result.site && <span>📍 {result.site}</span>}
-                {result.date && <span>📅 {result.date}</span>}
-                <span className="font-mono bg-blue-100 dark:bg-blue-900 px-1.5 py-0.5 rounded">{result.code}</span>
+          <div className="rounded-xl border border-emerald-200 dark:border-emerald-800 overflow-hidden">
+            <div className="flex items-center gap-3 px-4 py-3 bg-emerald-50 dark:bg-emerald-950/40 border-b border-emerald-200 dark:border-emerald-800">
+              <div className="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shrink-0">3</div>
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-sm text-emerald-900 dark:text-emerald-100 truncate">{result.name}</p>
+                <div className="flex flex-wrap gap-2 mt-0.5 text-[11px] text-emerald-700 dark:text-emerald-300">
+                  {result.site && <span>📍 {result.site}</span>}
+                  {result.date && <span>📅 {result.date}</span>}
+                  <span className="font-mono bg-emerald-100 dark:bg-emerald-900 px-1.5 py-0.5 rounded">{result.code}</span>
+                </div>
               </div>
-              <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">{result.participant_count} participants found</p>
+              <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-300 shrink-0">{result.participant_count} found</span>
             </div>
 
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-bold">{selected.size} of {result.participants.length} selected</p>
+            <div className="p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-bold flex items-center gap-1.5">
+                  <ListChecks className="w-4 h-4 text-primary" />
+                  {selected.size} of {result.participants.length} selected
+                </p>
                 <button onClick={toggleAll} className="text-xs text-primary hover:underline font-medium">
                   {selected.size === result.participants.length ? 'Deselect all' : 'Select all'}
                 </button>
               </div>
+
               <div className="max-h-72 overflow-y-auto rounded-xl border divide-y">
                 {result.participants.map((p, i) => (
-                  <label key={i} className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-muted/40 transition-colors ${!selected.has(i) ? 'opacity-50' : ''}`}>
+                  <label key={i} className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-muted/40 transition-colors ${!selected.has(i) ? 'opacity-40' : ''}`}>
                     <input type="checkbox" checked={selected.has(i)} onChange={() => setSelected(prev => {
                       const next = new Set(prev); next.has(i) ? next.delete(i) : next.add(i); return next;
                     })} className="rounded accent-primary" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold truncate">{p.first_name} {p.surname}<span className="text-[10px] text-muted-foreground ml-1">{p.country}</span></p>
+                      <p className="text-sm font-semibold truncate">
+                        {p.first_name} {p.surname}
+                        <span className="text-[10px] text-muted-foreground ml-1 font-normal">{p.country}</span>
+                      </p>
                       <p className="text-[11px] text-muted-foreground">{p.division}</p>
                     </div>
-                    <div className="flex gap-1 flex-shrink-0">
+                    <div className="flex gap-1 shrink-0">
                       {p.events.map(ev => (
                         <span key={ev} className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${ev === 'Slalom' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-muted text-muted-foreground'}`}>
                           {ev[0]}
@@ -965,18 +1033,24 @@ function EmsImportPanel({ tournamentId }: { tournamentId: number }) {
                   </label>
                 ))}
               </div>
+
+              {imported > 0 && (
+                <div className="flex items-center gap-2 p-3 bg-emerald-50 dark:bg-emerald-950/30 rounded-xl border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-medium text-sm">
+                  <CheckCircle2 className="w-4 h-4" /> {imported} participants added to the tournament roster
+                </div>
+              )}
+
+              <Button
+                variant="primary"
+                onClick={importSelected}
+                isLoading={importing}
+                disabled={selected.size === 0 || importing}
+                className="w-full flex items-center justify-center gap-2"
+              >
+                <Download className="w-4 h-4" />
+                Import {selected.size} Participant{selected.size !== 1 ? 's' : ''} into Tournament
+              </Button>
             </div>
-
-            {imported > 0 && (
-              <div className="flex items-center gap-2 p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-emerald-700 font-medium text-sm">
-                <CheckCircle2 className="w-4 h-4" /> {imported} participants added to tournament roster
-              </div>
-            )}
-
-            <Button variant="primary" onClick={importSelected} isLoading={importing} disabled={selected.size === 0 || importing} className="w-full flex items-center justify-center gap-2">
-              <Download className="w-4 h-4" />
-              Import {selected.size} Participant{selected.size !== 1 ? 's' : ''} into Tournament
-            </Button>
           </div>
         )}
       </div>
