@@ -230,6 +230,48 @@ router.post("/apply", (_req, res) => {
     });
 });
 
+// ─── GET /api/update/download — generate & stream a fresh update ZIP ─────────
+router.get("/download", (_req, res) => {
+  const wsRoot          = findWorkspaceRoot();
+  const versionInfo     = readVersionFile();
+  const apiDistPath     = path.join(wsRoot, "artifacts", "api-server",   "dist");
+  const frontendDistPath = path.join(wsRoot, "artifacts", "slalom-stream", "dist");
+  const versionFilePath = path.join(wsRoot, "version.json");
+
+  const hasApiDist      = existsSync(apiDistPath);
+  const hasFrontendDist = existsSync(frontendDistPath);
+
+  if (!hasApiDist && !hasFrontendDist) {
+    return res.status(503).json({
+      error: "No built dist files found on this server. The app needs to be built before a download ZIP can be generated.",
+    });
+  }
+
+  try {
+    const zip = new AdmZip();
+
+    if (existsSync(versionFilePath)) {
+      zip.addLocalFile(versionFilePath, "");
+    }
+    if (hasApiDist) {
+      zip.addLocalFolder(apiDistPath, "artifacts/api-server/dist");
+    }
+    if (hasFrontendDist) {
+      zip.addLocalFolder(frontendDistPath, "artifacts/slalom-stream/dist");
+    }
+
+    const filename = `slalomstream-v${versionInfo.version}.zip`;
+    const buffer = zip.toBuffer();
+
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Content-Length", String(buffer.length));
+    res.send(buffer);
+  } catch (err: any) {
+    res.status(500).json({ error: `Failed to generate ZIP: ${String(err.message)}` });
+  }
+});
+
 // ─── ZIP Upload Update ────────────────────────────────────────────────────────
 // Stored in-memory between /upload (scan) and /apply-zip (commit)
 interface PendingZip {

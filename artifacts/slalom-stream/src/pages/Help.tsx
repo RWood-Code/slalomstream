@@ -67,7 +67,8 @@ const RELEASES: ReleaseEntry[] = [
     current: true,
     items: [
       'ZIP-based updates — upload a new-version ZIP through the Admin panel; the server validates and previews the version before applying; restarts automatically with no command-line access needed',
-      'Configurable update download location — admin can save a URL (Google Drive, Dropbox, etc.) so operators see a direct "Open download location" link in the update panel',
+      'Self-hosted update distribution — the published online app automatically generates and serves its own update ZIP at /api/update/download; every republish regenerates it from the latest build with no Google Drive or manual file sharing required',
+      'Configurable update download location — admin sets a URL once (Google Drive, Dropbox, or the self-hosted endpoint above); operators see a direct "Open download location" link at the venue',
       'Apply Update button appears after ZIP scan — upload a ZIP, review the version preview (current vs ZIP), then click Apply Update to confirm; no accidental overwrites',
       'EMS Import redesign — guided 3-step flow with "Open EMS Calendar" button (pre-filtered to NZL waterski), collapsible step-by-step instructions, and results card',
     ],

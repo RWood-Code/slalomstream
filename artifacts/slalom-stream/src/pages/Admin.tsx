@@ -1156,6 +1156,18 @@ function UpdatePanel() {
   };
 
   const downloadUrl = settings?.update_download_url ?? '';
+  const thisAppDownloadUrl = `${window.location.origin}/api/update/download`;
+
+  const useThisAppAsSource = async () => {
+    setDownloadUrlInput(thisAppDownloadUrl);
+    await fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ update_download_url: thisAppDownloadUrl }),
+    });
+    refetchSettings();
+    toast({ title: 'Download URL set', description: 'Pointing to this app\'s built-in download endpoint.' });
+  };
 
   return (
     <AdminSection
@@ -1201,6 +1213,27 @@ function UpdatePanel() {
               Open download location →
             </a>
           )}
+
+          {/* Auto-use this app as the source */}
+          <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-xl">
+            <p className="text-xs font-semibold text-blue-900 dark:text-blue-200 mb-1">Use this published app as the download source</p>
+            <p className="text-xs text-blue-700 dark:text-blue-300 mb-2">
+              When this app is published online, it can serve its own update ZIP automatically — no Google Drive needed. Every time you republish, the ZIP is regenerated from the latest build.
+            </p>
+            <div className="flex gap-2 items-center flex-wrap">
+              <code className="text-[11px] font-mono bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-200 px-2 py-1 rounded flex-1 min-w-0 truncate">
+                {thisAppDownloadUrl}
+              </code>
+              <Button
+                variant="outline"
+                className="h-7 text-xs gap-1.5 shrink-0 border-blue-300 dark:border-blue-700 text-blue-800 dark:text-blue-200 hover:bg-blue-100 dark:hover:bg-blue-900/40"
+                onClick={useThisAppAsSource}
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                Use this URL
+              </Button>
+            </div>
+          </div>
         </div>
 
         {/* ── ZIP Upload ───────────────────────────────────────────────── */}
