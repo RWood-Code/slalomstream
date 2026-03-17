@@ -49,7 +49,7 @@ Var PortNum
 
 Function ConfigPage
   !insertmacro MUI_HEADER_TEXT "Database Configuration" \
-    "Enter your PostgreSQL connection string and the port SlalomStream will listen on."
+    "The database URL below is pre-filled. Click Next to accept it."
 
   nsDialogs::Create 1018
   Pop $ConfigDialog
@@ -58,26 +58,25 @@ Function ConfigPage
   ${EndIf}
 
   ${NSD_CreateLabel} 0 0 100% 20u \
-    "PostgreSQL connection string (DATABASE_URL):"
+    "Database connection string (pre-filled from your SlalomStream account):"
   Pop $0
-  ${NSD_CreateText} 0 22u 100% 14u \
-    "postgresql://username:password@localhost:5432/slalomstream"
+  ${NSD_CreateText} 0 22u 100% 14u "${DEFAULT_DATABASE_URL}"
   Pop $hDbUrl
   ${If} $DatabaseUrl != ""
     ${NSD_SetText} $hDbUrl $DatabaseUrl
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 52u 100% 12u \
-    "Server port (judges connect to this computer's IP on this port):"
+  ${NSD_CreateLabel} 0 44u 100% 12u \
+    "Server port (judges and scoreboards connect on this port):"
   Pop $0
-  ${NSD_CreateNumber} 0 66u 60u 14u "3000"
+  ${NSD_CreateNumber} 0 58u 60u 14u "3000"
   Pop $hPort
   ${If} $PortNum != ""
     ${NSD_SetText} $hPort $PortNum
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 92u 100% 32u \
-    "Tip: After installation, any device on the same WiFi can reach SlalomStream$\r$\nat  http://<this-computer-IP>:3000  — no internet required."
+  ${NSD_CreateLabel} 0 82u 100% 40u \
+    "Tip: Once installed, any device on the same WiFi can open SlalomStream$\r$\nin their browser at  http://<this-computer-IP>:3000$\r$\n(no internet required during a tournament)."
   Pop $0
 
   nsDialogs::Show
