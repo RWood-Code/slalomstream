@@ -62,15 +62,24 @@ interface ReleaseEntry {
 
 const RELEASES: ReleaseEntry[] = [
   {
-    version: '1.3.0',
+    version: '1.4.0',
     date: 'March 2026',
     current: true,
     items: [
+      'Persistent Save Folders — set a primary and optional backup folder once; every recording saves there automatically with no per-file prompt (Chrome/Edge); both writes run in parallel; falls back to browser download if no folders are configured',
+      'Save folders survive browser restarts — folder handles stored in IndexedDB with automatic permission re-request on next session',
+      'Self-update mechanism — Admin panel: enter GitHub repo, check for new releases, apply updates in-place (git pull + rebuild); server restarts automatically; update log streamed live',
+      'Admin session security — PIN verification now issues a time-limited UUID token (8 h); all privileged API calls require the token',
+    ],
+  },
+  {
+    version: '1.3.0',
+    date: 'March 2026',
+    items: [
       'Lite Mode — operator enters all scores directly on the Recording page; judge navigation hidden; no judge devices required for single-operator events',
-      'Instant Replay Slide Panel — slide-up panel with independent video player after recording stops; main camera stays live; playback speed controls (0.25×–2×); save to local folder',
+      'Instant Replay Slide Panel — slide-up panel with independent video player after recording stops; main camera stays live; playback speed controls (0.25×–2×)',
       'Pop-out Live View — fullscreen /live route with score/pass/tournament overlays; auto-starts camera from saved device ID; controls auto-hide after 3 seconds',
       'Camera & Cam Link selector — device picker on Recording page; selected device persisted across sessions; hot-plug support; works with Elgato Cam Link 4K and similar capture devices',
-      'Save Location — File System Access API lets operator choose a save folder (Chrome/Edge); standard download fallback on other browsers',
       'QR codes now embed tournament ID — judges landing on a fresh device go directly into the correct tournament without manual selection',
       'Tournament Archive — admin can close out completed events; archived tournaments are hidden from the Home page tournament list',
       'Score Corrections — admin panel to override collated pass scores and correct individual judge scores with automatic re-collation',
