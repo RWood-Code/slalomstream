@@ -1086,6 +1086,15 @@ function UpdatePanel() {
   const [restarting, setRestarting] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // ZIP upload state
+  type ZipStatus = 'idle' | 'uploading' | 'scanned' | 'applying';
+  interface ZipScanResult { version: string; currentVersion: string; hasApiDist: boolean; hasFrontendDist: boolean }
+  const [zipStatus, setZipStatus]       = useState<ZipStatus>('idle');
+  const [zipScan, setZipScan]           = useState<ZipScanResult | null>(null);
+  const [zipError, setZipError]         = useState<string | null>(null);
+  const [zipRestarting, setZipRestarting] = useState(false);
+  const zipInputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     if (settings?.github_repo) setRepoInput(settings.github_repo);
   }, [settings]);
@@ -1160,6 +1169,55 @@ function UpdatePanel() {
         }
       } catch {}
     }, 1000);
+  };
+
+  const uploadZip = async (file: File) => {
+    setZipStatus('uploading');
+    setZipError(null);
+    setZipScan(null);
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const res = await fetch('/api/update/upload', {
+        method: 'POST',
+        headers: adminToken ? { 'X-Admin-Token': adminToken } : {},
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) { setZipError(data.error ?? 'Upload failed'); setZipStatus('idle'); return; }
+      setZipScan(data as ZipScanResult);
+      setZipStatus('scanned');
+    } catch (err: any) {
+      setZipError(err.message ?? 'Upload failed');
+      setZipStatus('idle');
+    }
+  };
+
+  const applyZip = async () => {
+    setZipStatus('applying');
+    setZipError(null);
+    try {
+      const res = await fetch('/api/update/apply-zip', {
+        method: 'POST',
+        headers: adminToken ? { 'X-Admin-Token': adminToken } : {},
+      });
+      const data = await res.json();
+      if (!res.ok) { setZipError(data.error ?? 'Apply failed'); setZipStatus('scanned'); return; }
+      // Poll for restart
+      setZipRestarting(true);
+      setTimeout(async () => {
+        for (let i = 0; i < 25; i++) {
+          await new Promise(r => setTimeout(r, 2000));
+          try {
+            const ping = await fetch('/api/health');
+            if (ping.ok) { window.location.reload(); return; }
+          } catch {}
+        }
+      }, 4000);
+    } catch (err: any) {
+      setZipError(err.message ?? 'Apply failed');
+      setZipStatus('scanned');
+    }
   };
 
   const statusBadge = checkResult
@@ -1287,9 +1345,106 @@ function UpdatePanel() {
 
         {!applyStarted && (
           <p className="text-xs text-muted-foreground border-t pt-3">
-            Requires the app to be installed via <code className="bg-muted px-1 rounded font-mono">git clone</code> and started with <code className="bg-muted px-1 rounded font-mono">start.sh</code> / <code className="bg-muted px-1 rounded font-mono">start.ps1</code>. ZIP installs must be updated manually.
+            Requires the app to be installed via <code className="bg-muted px-1 rounded font-mono">git clone</code> and started with <code className="bg-muted px-1 rounded font-mono">start.sh</code> / <code className="bg-muted px-1 rounded font-mono">start.ps1</code>.
           </p>
         )}
+
+        {/* ── ZIP Upload Alternative ──────────────────────────────────────── */}
+        <div className="border-t pt-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <div className="h-px flex-1 bg-border" />
+            <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground px-2">or update by ZIP (no git required)</span>
+            <div className="h-px flex-1 bg-border" />
+          </div>
+
+          {/* How-to hint */}
+          <div className="text-xs text-muted-foreground space-y-1 bg-muted/40 rounded-xl p-3">
+            <p className="font-semibold text-foreground">How to update without GitHub</p>
+            <ol className="list-decimal list-inside space-y-0.5 pl-1">
+              <li>In Replit, click the <strong>⋮</strong> menu → <strong>Download as ZIP</strong></li>
+              <li>Upload that ZIP using the button below</li>
+              <li>Review what's inside, then click <strong>Apply Update</strong></li>
+              <li>The server restarts automatically — no commands needed</li>
+            </ol>
+          </div>
+
+          {zipRestarting ? (
+            <div className="flex items-center gap-3 p-4 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl border border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 text-sm font-semibold">
+              <RefreshCw className="w-5 h-5 animate-spin shrink-0" />
+              <div>
+                <p>Update applied — server is restarting…</p>
+                <p className="font-normal text-xs mt-0.5">This page will reload automatically when the server is back online.</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* File picker */}
+              <input
+                ref={zipInputRef}
+                type="file"
+                accept=".zip,application/zip"
+                className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) uploadZip(f); e.target.value = ''; }}
+              />
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => zipInputRef.current?.click()}
+                  disabled={zipStatus === 'uploading' || zipStatus === 'applying'}
+                  isLoading={zipStatus === 'uploading'}
+                  className="flex items-center gap-2 flex-1"
+                >
+                  <Download className="w-4 h-4" />
+                  {zipStatus === 'uploading' ? 'Scanning ZIP…' : zipScan ? 'Upload different ZIP' : 'Upload ZIP file'}
+                </Button>
+                {zipScan && zipStatus === 'scanned' && (
+                  <Button
+                    variant="primary"
+                    onClick={applyZip}
+                    disabled={zipStatus === 'applying'}
+                    isLoading={zipStatus === 'applying'}
+                    className="flex items-center gap-2"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Apply Update
+                  </Button>
+                )}
+              </div>
+
+              {/* Scan result preview */}
+              {zipScan && zipStatus === 'scanned' && (
+                <div className="p-3 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    <span className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">Valid SlalomStream ZIP</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="bg-white dark:bg-emerald-900/30 rounded-lg p-2">
+                      <p className="text-muted-foreground">Current version</p>
+                      <p className="font-mono font-bold">v{zipScan.currentVersion}</p>
+                    </div>
+                    <div className="bg-white dark:bg-emerald-900/30 rounded-lg p-2">
+                      <p className="text-muted-foreground">ZIP version</p>
+                      <p className="font-mono font-bold">v{zipScan.version}</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 text-[11px] text-emerald-700 dark:text-emerald-300">
+                    {zipScan.hasApiDist      && <span className="bg-emerald-100 dark:bg-emerald-900 px-2 py-0.5 rounded">✓ Server</span>}
+                    {zipScan.hasFrontendDist && <span className="bg-emerald-100 dark:bg-emerald-900 px-2 py-0.5 rounded">✓ Frontend</span>}
+                  </div>
+                </div>
+              )}
+
+              {/* Error */}
+              {zipError && (
+                <div className="flex items-start gap-2 p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-300 text-xs">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{zipError}</span>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </AdminSection>
   );

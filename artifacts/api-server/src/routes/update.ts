@@ -1,8 +1,10 @@
 import { Router } from "express";
 import { spawn } from "child_process";
-import { existsSync, readFileSync, readSync, openSync, closeSync, fstatSync, writeFileSync, appendFileSync } from "fs";
+import { existsSync, readFileSync, readSync, openSync, closeSync, fstatSync, writeFileSync, appendFileSync, mkdirSync, rmSync, cpSync, readdirSync } from "fs";
 import path from "path";
 import os from "os";
+import multer from "multer";
+import AdmZip from "adm-zip";
 import { isValidAdminSession } from "./settings.js";
 
 const router = Router();
@@ -226,6 +228,182 @@ router.post("/apply", (_req, res) => {
       log(`\n✗ Update failed: ${message}\n`);
       updateInProgress = false;
     });
+});
+
+// ─── ZIP Upload Update ────────────────────────────────────────────────────────
+// Stored in-memory between /upload (scan) and /apply-zip (commit)
+interface PendingZip {
+  tempPath: string;
+  extractedRoot: string;
+  version: string;
+  hasApiDist: boolean;
+  hasFrontendDist: boolean;
+  uploadedAt: number;
+}
+let pendingZip: PendingZip | null = null;
+
+const zipUpload = multer({
+  dest: os.tmpdir(),
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500 MB max
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype === "application/zip" || file.originalname.endsWith(".zip")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only .zip files are accepted"));
+    }
+  },
+});
+
+/**
+ * Find the workspace root inside an extracted ZIP directory.
+ * The ZIP may have a top-level wrapper folder (e.g. workspace-slalom-stream/).
+ * We look for version.json as the anchor.
+ */
+function findExtractedRoot(tmpDir: string): string | null {
+  // Check root directly
+  if (existsSync(path.join(tmpDir, "version.json"))) return tmpDir;
+  // Check one level deep (Replit wraps in a folder)
+  try {
+    for (const entry of readdirSync(tmpDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        const candidate = path.join(tmpDir, entry.name);
+        if (existsSync(path.join(candidate, "version.json"))) return candidate;
+      }
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+/** Copy `src` directory into `dest`, creating dest if needed. */
+function copyDir(src: string, dest: string) {
+  mkdirSync(dest, { recursive: true });
+  cpSync(src, dest, { recursive: true, force: true });
+}
+
+// POST /api/update/upload  — receive ZIP, scan contents, return preview
+router.post("/upload", (req, res, next) => {
+  // Auth check before touching the file
+  const token = req.headers["x-admin-token"] as string | undefined;
+  if (!isValidAdminSession(token)) {
+    return res.status(401).json({ error: "Admin authentication required." });
+  }
+  next();
+}, zipUpload.single("file"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "No file uploaded." });
+
+  const tempZipPath = req.file.path;
+  const extractDir  = path.join(os.tmpdir(), `slalom-zip-${Date.now()}`);
+
+  try {
+    // Extract
+    const zip = new AdmZip(tempZipPath);
+    zip.extractAllTo(extractDir, true);
+
+    // Find workspace root
+    const wsRoot = findExtractedRoot(extractDir);
+    if (!wsRoot) {
+      rmSync(extractDir, { recursive: true, force: true });
+      return res.status(422).json({ error: "This doesn't look like a SlalomStream ZIP — could not find version.json. Make sure you download the full project from Replit (⋮ → Download as ZIP)." });
+    }
+
+    // Read version
+    let version = "unknown";
+    try {
+      const vf = JSON.parse(readFileSync(path.join(wsRoot, "version.json"), "utf-8"));
+      version = vf.version ?? "unknown";
+    } catch { /* unknown version is fine */ }
+
+    const hasApiDist      = existsSync(path.join(wsRoot, "artifacts", "api-server",   "dist", "index.cjs"));
+    const hasFrontendDist = existsSync(path.join(wsRoot, "artifacts", "slalom-stream", "dist", "index.html"));
+
+    if (!hasApiDist && !hasFrontendDist) {
+      rmSync(extractDir, { recursive: true, force: true });
+      return res.status(422).json({
+        error: "The ZIP does not contain any built files (dist directories are missing). Open the project in Replit, run a build first, then download the ZIP.",
+      });
+    }
+
+    // Discard any previous pending ZIP
+    if (pendingZip) {
+      try { rmSync(pendingZip.extractedRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+
+    pendingZip = { tempPath: tempZipPath, extractedRoot: wsRoot, version, hasApiDist, hasFrontendDist, uploadedAt: Date.now() };
+
+    const currentVersion = readVersionFile().version;
+    res.json({ version, currentVersion, hasApiDist, hasFrontendDist, ready: true });
+  } catch (err: any) {
+    try { rmSync(extractDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    res.status(500).json({ error: `Failed to read ZIP: ${err.message}` });
+  }
+});
+
+// POST /api/update/apply-zip  — commit the scanned ZIP and restart
+router.post("/apply-zip", (req, res) => {
+  const token = req.headers["x-admin-token"] as string | undefined;
+  if (!isValidAdminSession(token)) {
+    return res.status(401).json({ error: "Admin authentication required." });
+  }
+  if (!pendingZip) {
+    return res.status(400).json({ error: "No ZIP uploaded yet. Upload a ZIP first." });
+  }
+  // Reject stale uploads (older than 10 minutes)
+  if (Date.now() - pendingZip.uploadedAt > 10 * 60 * 1000) {
+    pendingZip = null;
+    return res.status(400).json({ error: "Upload expired — please upload the ZIP again." });
+  }
+  if (updateInProgress) {
+    return res.status(409).json({ error: "Another update is already in progress." });
+  }
+
+  updateInProgress = true;
+  const { extractedRoot, hasApiDist, hasFrontendDist, version } = pendingZip;
+
+  try {
+    writeFileSync(UPDATE_LOG, `[${new Date().toISOString()}] Applying ZIP update to v${version}…\n`);
+  } catch { /* ignore */ }
+
+  res.json({ started: true });
+
+  const log = (msg: string) => {
+    try { appendFileSync(UPDATE_LOG, msg); } catch { /* ignore */ }
+    process.stdout.write("[ZIP Update] " + msg);
+  };
+
+  const wsRoot = findWorkspaceRoot();
+
+  setTimeout(() => {
+    try {
+      if (hasApiDist) {
+        const src  = path.join(extractedRoot, "artifacts", "api-server",   "dist");
+        const dest = path.join(wsRoot,         "artifacts", "api-server",   "dist");
+        log(`Copying server dist…\n`);
+        copyDir(src, dest);
+        log(`Server dist copied.\n`);
+      }
+      if (hasFrontendDist) {
+        const src  = path.join(extractedRoot, "artifacts", "slalom-stream", "dist");
+        const dest = path.join(wsRoot,         "artifacts", "slalom-stream", "dist");
+        log(`Copying frontend dist…\n`);
+        copyDir(src, dest);
+        log(`Frontend dist copied.\n`);
+      }
+      // Update version.json
+      const srcVf  = path.join(extractedRoot, "version.json");
+      const destVf = path.join(wsRoot,         "version.json");
+      if (existsSync(srcVf)) {
+        cpSync(srcVf, destVf, { force: true });
+        log(`version.json updated to v${version}.\n`);
+      }
+
+      log(`\n✓ ZIP update applied. Server will restart now.\n`);
+      pendingZip = null;
+      setTimeout(() => process.exit(42), 1000);
+    } catch (err: any) {
+      log(`\n✗ ZIP update failed: ${err.message}\n`);
+      updateInProgress = false;
+    }
+  }, 100);
 });
 
 export default router;
