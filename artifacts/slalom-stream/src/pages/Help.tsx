@@ -5,7 +5,7 @@ import {
   ChevronDown, ChevronUp, Radio, Shield, HelpCircle, Globe, GitBranch
 } from 'lucide-react';
 
-const VERSION = '1.3.0';
+const VERSION = '1.5.0';
 const RELEASE_DATE = 'March 2026';
 
 interface SectionProps {
@@ -62,13 +62,22 @@ interface ReleaseEntry {
 
 const RELEASES: ReleaseEntry[] = [
   {
-    version: '1.4.0',
+    version: '1.5.0',
     date: 'March 2026',
     current: true,
     items: [
+      'ZIP-based updates — upload a new-version ZIP through the Admin panel; the server validates and previews the version before applying; restarts automatically with no command-line access needed',
+      'Configurable update download location — admin can save a URL (Google Drive, Dropbox, etc.) so operators see a direct "Open download location" link in the update panel',
+      'Apply Update button appears after ZIP scan — upload a ZIP, review the version preview (current vs ZIP), then click Apply Update to confirm; no accidental overwrites',
+      'EMS Import redesign — guided 3-step flow with "Open EMS Calendar" button (pre-filtered to NZL waterski), collapsible step-by-step instructions, and results card',
+    ],
+  },
+  {
+    version: '1.4.0',
+    date: 'March 2026',
+    items: [
       'Persistent Save Folders — set a primary and optional backup folder once; every recording saves there automatically with no per-file prompt (Chrome/Edge); both writes run in parallel; falls back to browser download if no folders are configured',
       'Save folders survive browser restarts — folder handles stored in IndexedDB with automatic permission re-request on next session',
-      'Self-update mechanism — Admin panel: enter GitHub repo, check for new releases, apply updates in-place (git pull + rebuild); server restarts automatically; update log streamed live',
       'Admin session security — PIN verification now issues a time-limited UUID token (8 h); all privileged API calls require the token',
     ],
   },
