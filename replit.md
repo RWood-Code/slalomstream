@@ -21,6 +21,7 @@ Digital scorecard for professional slalom waterski tournaments. A clone of slalo
   - Live spectator scoreboard (auto-refresh every 5s)
   - Admin panel (PIN-protected)
   - Offline-capable (state stored in localStorage via Zustand persist)
+- **Recording save folders**: Persistent primary + backup folder pickers via File System Access API (IndexedDB-persisted `FileSystemDirectoryHandle`). Auto-saves to both on every recording; falls back to browser download if no folders set. `useSaveFolders` hook + `SaveFolderBar` component. IDB helpers (`openDirDB`, `idbGetDir`, `idbSetDir`, `idbDeleteDir`) in Recording.tsx.
 - **Pages**: Home, Recording, Judging, Scoreboard, Officials, Admin, Help
 - **Colors**: Emerald green theme
 - **NZTWSA Officials Register**: 135 officials seeded from NZTWSA register (13 Feb 2026), filterable by region/grade/financial status. Officials with a PIN set are auto-available as judges in any tournament (no per-tournament setup needed). Set PINs via the Officials page — click "Set PIN" on any row.

@@ -9,7 +9,7 @@ import {
   Play, SquareSquare, Timer, User, Wifi, ChevronDown, ChevronUp,
   Camera, CameraOff, Circle, Square, Maximize2, RefreshCw,
   CheckCircle2, Download, ExternalLink, SwitchCamera,
-  X, Monitor, Gauge, MonitorPlay
+  X, Monitor, Gauge, MonitorPlay, FolderOpen, FolderPlus
 } from 'lucide-react';
 import { ROPE_LENGTHS, SPEEDS, VALID_IWWF_SCORES, formatRope, formatSpeed, getRopeColour, getJudgingPanel } from '@/lib/utils';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
@@ -18,7 +18,133 @@ import { QRCodeSVG } from 'qrcode.react';
 
 const LS_DEVICE_KEY = 'slalom_camera_device_id';
 const LS_LITE_MODE  = 'slalom_lite_mode';
-const LS_ASK_SAVE  = 'slalom_ask_save_location';
+
+// ─── IndexedDB helpers for persisting directory handles ───────────────────────
+const IDB_DB_NAME = 'slalom-stream-dirs';
+const IDB_STORE   = 'dirs';
+const IDB_PRIMARY = 'primary';
+const IDB_BACKUP  = 'backup';
+
+function openDirDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror   = () => reject(req.error);
+  });
+}
+async function idbGetDir(key: string): Promise<FileSystemDirectoryHandle | null> {
+  const db = await openDirDB();
+  return new Promise((resolve, reject) => {
+    const tx  = db.transaction(IDB_STORE, 'readonly');
+    const req = tx.objectStore(IDB_STORE).get(key);
+    req.onsuccess = () => resolve((req.result as FileSystemDirectoryHandle) ?? null);
+    req.onerror   = () => reject(req.error);
+  });
+}
+async function idbSetDir(key: string, handle: FileSystemDirectoryHandle): Promise<void> {
+  const db = await openDirDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).put(handle, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror    = () => reject(tx.error);
+  });
+}
+async function idbDeleteDir(key: string): Promise<void> {
+  const db = await openDirDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror    = () => reject(tx.error);
+  });
+}
+
+// ─── Save folder hook ─────────────────────────────────────────────────────────
+interface SaveFolders {
+  primaryHandle: FileSystemDirectoryHandle | null;
+  backupHandle:  FileSystemDirectoryHandle | null;
+  hasDirectoryPicker: boolean;
+  choosePrimary: () => Promise<void>;
+  chooseBackup:  () => Promise<void>;
+  clearPrimary:  () => Promise<void>;
+  clearBackup:   () => Promise<void>;
+  /** Write blob to primary (and backup if set). Returns true if at least one folder saved. */
+  saveToFolders: (blob: Blob, filename: string) => Promise<{ savedPrimary: boolean; savedBackup: boolean }>;
+}
+
+function useSaveFolders(): SaveFolders {
+  const [primaryHandle, setPrimaryHandle] = useState<FileSystemDirectoryHandle | null>(null);
+  const [backupHandle,  setBackupHandle]  = useState<FileSystemDirectoryHandle | null>(null);
+  const hasDirectoryPicker = typeof (window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker === 'function';
+
+  useEffect(() => {
+    if (!hasDirectoryPicker) return;
+    (async () => {
+      try {
+        const [p, b] = await Promise.all([idbGetDir(IDB_PRIMARY), idbGetDir(IDB_BACKUP)]);
+        if (p) {
+          const perm = await (p as unknown as { requestPermission?(o: object): Promise<string> }).requestPermission?.({ mode: 'readwrite' }) ?? 'granted';
+          if (perm === 'granted') setPrimaryHandle(p);
+        }
+        if (b) {
+          const perm = await (b as unknown as { requestPermission?(o: object): Promise<string> }).requestPermission?.({ mode: 'readwrite' }) ?? 'granted';
+          if (perm === 'granted') setBackupHandle(b);
+        }
+      } catch { /* permission denied or IDB error — silently ignore */ }
+    })();
+  }, [hasDirectoryPicker]);
+
+  const pickDir = async (): Promise<FileSystemDirectoryHandle | null> => {
+    try {
+      const handle = await (window as unknown as { showDirectoryPicker(o?: object): Promise<FileSystemDirectoryHandle> }).showDirectoryPicker({ mode: 'readwrite' });
+      return handle;
+    } catch (e) {
+      const err = e as Error;
+      if (err.name === 'AbortError') return null;
+      if (err.name === 'SecurityError') {
+        alert('Folder picker is not available inside the Replit preview pane. Open the app directly in a browser tab to set save folders.');
+        return null;
+      }
+      throw e;
+    }
+  };
+
+  const choosePrimary = async () => {
+    const h = await pickDir();
+    if (!h) return;
+    await idbSetDir(IDB_PRIMARY, h);
+    setPrimaryHandle(h);
+  };
+  const chooseBackup = async () => {
+    const h = await pickDir();
+    if (!h) return;
+    await idbSetDir(IDB_BACKUP, h);
+    setBackupHandle(h);
+  };
+  const clearPrimary = async () => { await idbDeleteDir(IDB_PRIMARY); setPrimaryHandle(null); };
+  const clearBackup  = async () => { await idbDeleteDir(IDB_BACKUP);  setBackupHandle(null); };
+
+  const saveToFolders = async (blob: Blob, filename: string) => {
+    const writeToDir = async (dir: FileSystemDirectoryHandle): Promise<boolean> => {
+      try {
+        const fh = await dir.getFileHandle(filename, { create: true });
+        const writable = await fh.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return true;
+      } catch { return false; }
+    };
+    const [savedPrimary, savedBackup] = await Promise.all([
+      primaryHandle ? writeToDir(primaryHandle) : Promise.resolve(false),
+      backupHandle  ? writeToDir(backupHandle)  : Promise.resolve(false),
+    ]);
+    return { savedPrimary, savedBackup };
+  };
+
+  return { primaryHandle, backupHandle, hasDirectoryPicker, choosePrimary, chooseBackup, clearPrimary, clearBackup, saveToFolders };
+}
 
 // ─── Network info ─────────────────────────────────────────────────────────────
 interface NetworkInfo { addresses: { name: string; address: string; family: string }[]; port: string; urls: string[] }
@@ -176,33 +302,22 @@ function useVideoRecorder() {
 
   const dismissReplay = useCallback(() => setShowReplay(false), []);
 
-  // Save with File System Access API if available, otherwise standard download
-  const saveRecording = useCallback(async (skierName?: string) => {
+  // Save to configured folders (primary + backup), falling back to browser download
+  const saveRecording = useCallback(async (
+    skierName?: string,
+    folderSave?: (blob: Blob, filename: string) => Promise<{ savedPrimary: boolean; savedBackup: boolean }> | null,
+  ) => {
     if (!blobRef.current) return;
     const filename = skierName
       ? `${skierName.replace(/\s+/g, '-')}-${Date.now()}.webm`
       : `slalom-${Date.now()}.webm`;
 
-    const askForLocation = localStorage.getItem(LS_ASK_SAVE) === 'true';
-    const fsa = (window as any).showSaveFilePicker;
-
-    if (askForLocation && fsa) {
-      try {
-        const handle = await fsa({
-          suggestedName: filename,
-          types: [{ description: 'WebM Video', accept: { 'video/webm': ['.webm'] } }],
-        });
-        const writable = await handle.createWritable();
-        await writable.write(blobRef.current);
-        await writable.close();
-        return;
-      } catch (e: any) {
-        if (e.name === 'AbortError') return; // user cancelled picker
-        // fall through to download link
-      }
+    if (folderSave) {
+      const { savedPrimary, savedBackup } = await folderSave(blobRef.current, filename);
+      if (savedPrimary || savedBackup) return; // at least one succeeded — done
     }
 
-    // Standard download fallback
+    // Standard download fallback (no folders set or write failed)
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blobRef.current);
     a.download = filename;
@@ -407,7 +522,7 @@ interface ReplaySlidePanelProps {
   replayUrl: string | null;
   open: boolean;
   onClose: () => void;
-  onSave: () => void;
+  onSave: () => void | Promise<void>;
   skierName?: string | null;
 }
 
@@ -739,6 +854,67 @@ function JudgeConnectPanel({ tournament }: { tournament: any }) {
   );
 }
 
+// ─── Save Folder Bar ─────────────────────────────────────────────────────────
+function SaveFolderBar({ folders }: { folders: SaveFolders }) {
+  const { hasDirectoryPicker, primaryHandle, backupHandle, choosePrimary, chooseBackup, clearPrimary, clearBackup } = folders;
+
+  if (!hasDirectoryPicker) return null;
+
+  const Row = ({
+    label, handle, onChoose, onClear,
+  }: {
+    label: string;
+    handle: FileSystemDirectoryHandle | null;
+    onChoose: () => void;
+    onClear: () => void;
+  }) => (
+    <div className="flex items-center gap-2 min-w-0">
+      <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-14 shrink-0">{label}</span>
+      {handle ? (
+        <>
+          <FolderOpen className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+          <span className="text-xs font-mono text-foreground truncate max-w-[160px]" title={handle.name}>{handle.name}</span>
+          <button
+            onClick={onChoose}
+            className="text-[10px] text-muted-foreground hover:text-foreground transition-colors shrink-0 underline underline-offset-2"
+          >
+            Change
+          </button>
+          <button
+            onClick={onClear}
+            className="text-[10px] text-muted-foreground hover:text-destructive transition-colors shrink-0"
+            title="Remove this folder"
+          >
+            <X className="w-3 h-3" />
+          </button>
+        </>
+      ) : (
+        <>
+          <button
+            onClick={onChoose}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors border border-dashed border-border rounded px-2 py-0.5"
+          >
+            <FolderPlus className="w-3.5 h-3.5" /> Set folder…
+          </button>
+        </>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="border border-border rounded-xl px-3 py-2.5 space-y-1.5 bg-muted/30">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Save Location</p>
+      <Row label="Primary" handle={primaryHandle} onChoose={choosePrimary} onClear={clearPrimary} />
+      <Row label="Backup"  handle={backupHandle}  onChoose={chooseBackup}  onClear={clearBackup} />
+      {!primaryHandle && !backupHandle && (
+        <p className="text-[10px] text-muted-foreground/70 pt-0.5">
+          No folder set — recordings will download to your browser&apos;s download folder.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Recording Page ───────────────────────────────────────────────────────
 export default function Recording() {
   const { activeTournamentId } = useAppStore();
@@ -765,20 +941,14 @@ export default function Recording() {
 
   // Persistent settings
   const [liteMode, setLiteMode] = useState(() => localStorage.getItem(LS_LITE_MODE) === 'true');
-  const [askSave, setAskSave] = useState(() => localStorage.getItem(LS_ASK_SAVE) === 'true');
-  const hasFSA = typeof (window as any).showSaveFilePicker === 'function';
 
   const toggleLiteMode = () => {
     const next = !liteMode;
     setLiteMode(next);
     localStorage.setItem(LS_LITE_MODE, String(next));
   };
-  const toggleAskSave = () => {
-    const next = !askSave;
-    setAskSave(next);
-    localStorage.setItem(LS_ASK_SAVE, String(next));
-  };
 
+  const folders = useSaveFolders();
   const video = useVideoRecorder();
   const prevActivePassId = useRef<number | null>(null);
 
@@ -914,13 +1084,8 @@ export default function Recording() {
             </div>
           )}
 
-          {/* Save location setting */}
-          {hasFSA && (
-            <label className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors select-none">
-              <input type="checkbox" checked={askSave} onChange={toggleAskSave} className="rounded" />
-              Ask where to save each recording (choose folder/filename)
-            </label>
-          )}
+          {/* Save folder settings */}
+          <SaveFolderBar folders={folders} />
 
           {/* Judge connect panel OR lite score entry */}
           {liteMode ? (
@@ -1066,7 +1231,17 @@ export default function Recording() {
         replayUrl={video.replayUrl}
         open={video.showReplay}
         onClose={video.dismissReplay}
-        onSave={() => video.saveRecording(activePass?.skier_name ?? undefined)}
+        onSave={async () => {
+          const skierName = activePass?.skier_name ?? undefined;
+          const hasFolders = folders.primaryHandle || folders.backupHandle;
+          await video.saveRecording(skierName, hasFolders ? folders.saveToFolders : null);
+          if (hasFolders) {
+            const parts: string[] = [];
+            if (folders.primaryHandle) parts.push(folders.primaryHandle.name);
+            if (folders.backupHandle) parts.push(`backup: ${folders.backupHandle.name}`);
+            toast({ title: 'Recording saved', description: parts.join(' · ') });
+          }
+        }}
         skierName={activePass?.skier_name}
       />
     </div>
