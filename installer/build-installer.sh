@@ -101,7 +101,16 @@ else
 fi
 
 echo "  Extracting node.exe..."
-unzip -p "$NODE_ZIP" "${NODE_DIR}/node.exe" > "$STAGE_DIR/node.exe"
+node -e "
+const AdmZip = require('$WORKSPACE_ROOT/node_modules/.pnpm/adm-zip@0.5.16/node_modules/adm-zip');
+const fs = require('fs');
+const zip = new AdmZip('$NODE_ZIP');
+const entry = zip.getEntry('${NODE_DIR}/node.exe');
+if (!entry) { console.error('node.exe not found in zip'); process.exit(1); }
+const data = zip.readFile(entry);
+fs.writeFileSync('$STAGE_DIR/node.exe', data);
+console.log('  Extracted successfully (' + (data.length / 1024 / 1024).toFixed(1) + ' MB)');
+"
 NODE_SIZE=$(du -sh "$STAGE_DIR/node.exe" | cut -f1)
 echo "  node.exe staged (${NODE_SIZE})"
 
