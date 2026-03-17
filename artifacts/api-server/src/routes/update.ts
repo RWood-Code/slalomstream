@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { spawn } from "child_process";
-import { existsSync, readFileSync, writeFileSync, appendFileSync } from "fs";
+import { existsSync, readFileSync, readSync, openSync, closeSync, fstatSync, writeFileSync, appendFileSync } from "fs";
 import path from "path";
 import os from "os";
 import { isValidAdminSession } from "./settings.js";
@@ -41,6 +41,34 @@ interface GitHubRelease {
   tag_name: string;
   body: string | null;
   html_url: string;
+}
+
+/** Read up to the last `maxBytes` of a file (avoids unbounded payload growth). */
+function tailFile(filePath: string, maxBytes = 50 * 1024): string {
+  if (!existsSync(filePath)) return "";
+  const fd = openSync(filePath, "r");
+  try {
+    const { size } = fstatSync(fd);
+    const offset = Math.max(0, size - maxBytes);
+    const length = size - offset;
+    const buf = Buffer.alloc(length);
+    readSync(fd, buf, 0, length, offset);
+    const text = buf.toString("utf-8");
+    // Skip a partial first line when we truncated
+    return offset > 0 ? text.slice(text.indexOf("\n") + 1) : text;
+  } finally {
+    try { closeSync(fd); } catch { /* noop */ }
+  }
+}
+
+/** Returns true when `latest` is strictly newer than `current` (semver numeric). */
+function isNewerVersion(latest: string, current: string): boolean {
+  const parse = (v: string) => v.replace(/^v/, "").split(".").map(n => parseInt(n, 10) || 0);
+  const [lMaj, lMin, lPat] = parse(latest);
+  const [cMaj, cMin, cPat] = parse(current);
+  if (lMaj !== cMaj) return lMaj > cMaj;
+  if (lMin !== cMin) return lMin > cMin;
+  return lPat > cPat;
 }
 
 // ─── GET /api/update/version ─────────────────────────────────────────────────
@@ -105,7 +133,7 @@ router.get("/check", async (_req, res) => {
 
     const data = (await resp.json()) as GitHubRelease;
     const latest = String(data.tag_name ?? "").replace(/^v/, "");
-    const upToDate = current === latest || !latest;
+    const upToDate = !latest || !isNewerVersion(latest, current);
 
     return res.json({
       status: upToDate ? "up_to_date" : "update_available",
@@ -123,7 +151,7 @@ router.get("/check", async (_req, res) => {
 // ─── GET /api/update/log ──────────────────────────────────────────────────────
 router.get("/log", (_req, res) => {
   try {
-    const content = existsSync(UPDATE_LOG) ? readFileSync(UPDATE_LOG, "utf-8") : "";
+    const content = tailFile(UPDATE_LOG);
     res.json({ log: content, in_progress: updateInProgress });
   } catch {
     res.json({ log: "", in_progress: false });

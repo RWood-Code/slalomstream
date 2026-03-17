@@ -43,39 +43,36 @@ router.get("/", async (_req, res) => {
 });
 
 router.put("/", async (req, res) => {
-  const {
-    admin_pin,
-    waterskiconnect_enabled,
-    waterskiconnect_url,
-    waterskiconnect_token,
-    surepath_enabled,
-    surepath_event_name,
-    surepath_event_sub_id,
-    surepath_observer_pin,
-    active_tournament_id,
-    connection_mode,
-    public_url,
-    github_repo,
-  } = req.body;
+  const body = req.body as Record<string, unknown>;
 
   await getOrCreateSettings();
 
+  // Build a partial update — only touch fields that were explicitly provided.
+  // This makes the endpoint merge-safe: a caller sending only { github_repo }
+  // will not accidentally reset admin_pin, waterskiconnect settings, etc.
+  const patch: Partial<typeof appSettingsTable.$inferInsert> = {};
+
+  if ("admin_pin"               in body) patch.admin_pin               = (body.admin_pin as string | null) ?? null;
+  if ("waterskiconnect_enabled" in body) patch.waterskiconnect_enabled  = Boolean(body.waterskiconnect_enabled);
+  if ("waterskiconnect_url"     in body) patch.waterskiconnect_url      = (body.waterskiconnect_url as string | null) ?? null;
+  if ("waterskiconnect_token"   in body) patch.waterskiconnect_token    = (body.waterskiconnect_token as string | null) ?? null;
+  if ("surepath_enabled"        in body) patch.surepath_enabled         = Boolean(body.surepath_enabled);
+  if ("surepath_event_name"     in body) patch.surepath_event_name      = (body.surepath_event_name as string | null) ?? null;
+  if ("surepath_event_sub_id"   in body) patch.surepath_event_sub_id    = (body.surepath_event_sub_id as string | null) ?? null;
+  if ("surepath_observer_pin"   in body) patch.surepath_observer_pin    = (body.surepath_observer_pin as string | null) ?? null;
+  if ("active_tournament_id"    in body) patch.active_tournament_id     = (body.active_tournament_id as number | null) ?? null;
+  if ("connection_mode"         in body) patch.connection_mode          = (body.connection_mode as string) || "local";
+  if ("public_url"              in body) patch.public_url               = (body.public_url as string | null) ?? null;
+  if ("github_repo"             in body) patch.github_repo              = (body.github_repo as string | null) ?? null;
+
+  if (Object.keys(patch).length === 0) {
+    const current = await getOrCreateSettings();
+    return res.json(current);
+  }
+
   const [updated] = await db
     .update(appSettingsTable)
-    .set({
-      admin_pin: admin_pin ?? null,
-      waterskiconnect_enabled: waterskiconnect_enabled ?? false,
-      waterskiconnect_url: waterskiconnect_url ?? null,
-      waterskiconnect_token: waterskiconnect_token ?? null,
-      surepath_enabled: surepath_enabled ?? false,
-      surepath_event_name: surepath_event_name ?? null,
-      surepath_event_sub_id: surepath_event_sub_id ?? null,
-      surepath_observer_pin: surepath_observer_pin ?? null,
-      active_tournament_id: active_tournament_id ?? null,
-      connection_mode: connection_mode ?? "local",
-      public_url: public_url ?? null,
-      github_repo: github_repo ?? null,
-    })
+    .set(patch)
     .where(eq(appSettingsTable.id, 1))
     .returning();
 
