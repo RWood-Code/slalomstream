@@ -5,7 +5,7 @@ import {
   ChevronDown, ChevronUp, Radio, Shield, HelpCircle, Globe, GitBranch
 } from 'lucide-react';
 
-const VERSION = '1.5.0';
+const VERSION = '1.6.0';
 const RELEASE_DATE = 'March 2026';
 
 interface SectionProps {
@@ -62,13 +62,24 @@ interface ReleaseEntry {
 
 const RELEASES: ReleaseEntry[] = [
   {
-    version: '1.5.0',
+    version: '1.6.0',
     date: 'March 2026',
     current: true,
     items: [
+      'One-click automatic update — venue admin clicks "Fetch & prepare update" and the server downloads the latest ZIP directly from the configured URL, scans it, and shows a version preview; no file download or upload required',
+      'Download update ZIP button — saves the current build as a ZIP using the browser\'s fetch connection (fixes a 404 issue that occurred when navigating directly to the download URL)',
+      'Fixed update download URL not persisting — the setting was missing from the database schema so saves had no effect; now correctly saved and loaded across sessions',
+      '"Use this app as update source" — one-click button sets the download URL to this app\'s own endpoint; every republish automatically refreshes the available ZIP',
+      '"Fetch & prepare update" button always visible — shows with guidance when no URL is set yet, becomes active once one is configured',
+    ],
+  },
+  {
+    version: '1.5.0',
+    date: 'March 2026',
+    items: [
       'ZIP-based updates — upload a new-version ZIP through the Admin panel; the server validates and previews the version before applying; restarts automatically with no command-line access needed',
-      'Self-hosted update distribution — the published online app automatically generates and serves its own update ZIP at /api/update/download; every republish regenerates it from the latest build with no Google Drive or manual file sharing required',
-      'Configurable update download location — admin sets a URL once (Google Drive, Dropbox, or the self-hosted endpoint above); operators see a direct "Open download location" link at the venue',
+      'Self-hosted update distribution — the published online app automatically generates and serves its own update ZIP; every republish regenerates it from the latest build',
+      'Configurable update download location — admin sets a URL once (Google Drive, Dropbox, or the self-hosted endpoint); GitHub/git update UI removed from Admin panel',
       'Apply Update button appears after ZIP scan — upload a ZIP, review the version preview (current vs ZIP), then click Apply Update to confirm; no accidental overwrites',
       'EMS Import redesign — guided 3-step flow with "Open EMS Calendar" button (pre-filtered to NZL waterski), collapsible step-by-step instructions, and results card',
     ],
