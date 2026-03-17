@@ -1077,98 +1077,37 @@ function UpdatePanel() {
     queryFn: async () => { const res = await fetch('/api/settings'); return res.json(); },
   });
 
-  const [repoInput, setRepoInput] = useState('');
   const [installedVersion, setInstalledVersion] = useState<string | null>(null);
-  const [checkResult, setCheckResult] = useState<CheckResult | null>(null);
-  const [isChecking, setIsChecking] = useState(false);
-  const [applyStarted, setApplyStarted] = useState(false);
-  const [logContent, setLogContent] = useState('');
-  const [restarting, setRestarting] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [downloadUrlInput, setDownloadUrlInput] = useState('');
 
   // ZIP upload state
   type ZipStatus = 'idle' | 'uploading' | 'scanned' | 'applying';
   interface ZipScanResult { version: string; currentVersion: string; hasApiDist: boolean; hasFrontendDist: boolean }
-  const [zipStatus, setZipStatus]       = useState<ZipStatus>('idle');
-  const [zipScan, setZipScan]           = useState<ZipScanResult | null>(null);
-  const [zipError, setZipError]         = useState<string | null>(null);
+  const [zipStatus, setZipStatus]         = useState<ZipStatus>('idle');
+  const [zipScan, setZipScan]             = useState<ZipScanResult | null>(null);
+  const [zipError, setZipError]           = useState<string | null>(null);
   const [zipRestarting, setZipRestarting] = useState(false);
   const zipInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (settings?.github_repo) setRepoInput(settings.github_repo);
-  }, [settings]);
 
   useEffect(() => {
     fetch('/api/update/version')
       .then(r => r.json() as Promise<{ version: string }>)
       .then(d => setInstalledVersion(d.version))
-      .catch(() => { /* ignore — version shown after check */ });
+      .catch(() => {});
   }, []);
 
-  useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
+  useEffect(() => {
+    if (settings?.update_download_url) setDownloadUrlInput(settings.update_download_url);
+  }, [settings]);
 
-  const saveRepo = async (repo: string) => {
+  const saveDownloadUrl = async () => {
     await fetch('/api/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ github_repo: repo }),
+      body: JSON.stringify({ update_download_url: downloadUrlInput.trim() }),
     });
     refetchSettings();
-    toast({ title: 'GitHub repo saved' });
-  };
-
-  const checkForUpdate = async () => {
-    if (repoInput !== (settings?.github_repo ?? '')) await saveRepo(repoInput);
-    setIsChecking(true);
-    setCheckResult(null);
-    try {
-      const res = await fetch('/api/update/check');
-      setCheckResult(await res.json() as CheckResult);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      setCheckResult({ status: 'error', error: message });
-    } finally {
-      setIsChecking(false);
-    }
-  };
-
-  const applyUpdate = async () => {
-    setLogContent('');
-    const resp = await fetch('/api/update/apply', {
-      method: 'POST',
-      headers: adminToken ? { 'X-Admin-Token': adminToken } : {},
-    });
-    if (!resp.ok) {
-      const data = await resp.json() as { error?: string };
-      toast({ title: 'Update failed', description: data.error ?? 'Unexpected error', variant: 'destructive' });
-      return;
-    }
-    setApplyStarted(true);
-
-    intervalRef.current = setInterval(async () => {
-      try {
-        const res = await fetch('/api/update/log');
-        const data = await res.json();
-        setLogContent(data.log || '');
-        const done = data.log?.includes('Server will restart now') || data.log?.includes('Update failed');
-        if (done) {
-          clearInterval(intervalRef.current!);
-          if (data.log?.includes('Server will restart now')) {
-            setRestarting(true);
-            setTimeout(async () => {
-              for (let i = 0; i < 25; i++) {
-                await new Promise(r => setTimeout(r, 2000));
-                try {
-                  const ping = await fetch('/api/health');
-                  if (ping.ok) { window.location.reload(); return; }
-                } catch {}
-              }
-            }, 4000);
-          }
-        }
-      } catch {}
-    }, 1000);
+    toast({ title: 'Download URL saved' });
   };
 
   const uploadZip = async (file: File) => {
@@ -1203,15 +1142,11 @@ function UpdatePanel() {
       });
       const data = await res.json();
       if (!res.ok) { setZipError(data.error ?? 'Apply failed'); setZipStatus('scanned'); return; }
-      // Poll for restart
       setZipRestarting(true);
       setTimeout(async () => {
         for (let i = 0; i < 25; i++) {
           await new Promise(r => setTimeout(r, 2000));
-          try {
-            const ping = await fetch('/api/health');
-            if (ping.ok) { window.location.reload(); return; }
-          } catch {}
+          try { const ping = await fetch('/api/health'); if (ping.ok) { window.location.reload(); return; } } catch {}
         }
       }, 4000);
     } catch (err: any) {
@@ -1220,152 +1155,73 @@ function UpdatePanel() {
     }
   };
 
-  const statusBadge = checkResult
-    ? checkResult.status === 'up_to_date'       ? <Badge variant="success" className="text-xs flex gap-1 items-center"><CheckCircle2 className="w-3 h-3" /> Up to date</Badge>
-    : checkResult.status === 'update_available' ? <Badge variant="warning" className="text-xs">Update available: v{checkResult.latest}</Badge>
-    : checkResult.status === 'no_repo'          ? <Badge variant="outline" className="text-xs text-muted-foreground">No repo configured</Badge>
-    : checkResult.status === 'no_releases'      ? <Badge variant="outline" className="text-xs text-muted-foreground">No releases yet</Badge>
-    : checkResult.status === 'no_git'           ? <Badge variant="outline" className="text-xs text-amber-600">git not installed</Badge>
-    : checkResult.status === 'no_remote'        ? <Badge variant="outline" className="text-xs text-amber-600">No git remote</Badge>
-    :                                             <Badge variant="warning" className="text-xs">Error</Badge>
-    : undefined;
+  const downloadUrl = settings?.update_download_url ?? '';
 
   return (
     <AdminSection
       icon={<RefreshCw className="w-4 h-4" />}
       title="Software Update"
-      subtitle={`Check for and apply updates from your GitHub repository`}
-      badge={statusBadge}
+      subtitle="Update the app by uploading a new version ZIP"
     >
-      <div className="p-5 space-y-4">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span className="font-medium text-foreground">Current version:</span>
-          <code className="bg-muted px-2 py-0.5 rounded font-mono text-xs">
-            {checkResult?.current ?? installedVersion ?? '…'}
+      <div className="p-5 space-y-5">
+
+        {/* Current version */}
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">Installed version:</span>
+          <code className="bg-muted px-2 py-0.5 rounded font-mono text-xs font-bold">
+            v{installedVersion ?? '…'}
           </code>
-          {checkResult?.status === 'update_available' && (
-            <span className="text-muted-foreground">→</span>
-          )}
-          {checkResult?.status === 'update_available' && (
-            <code className="bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded font-mono text-xs">v{checkResult.latest}</code>
-          )}
         </div>
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">GitHub Repository</p>
+
+        {/* ── Download URL ─────────────────────────────────────────────── */}
+        <div className="space-y-2">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Update Download Location</p>
+          <p className="text-xs text-muted-foreground">
+            Set the URL where the latest ZIP is hosted (e.g. a Google Drive or Dropbox shared link). Operators can open it directly from this panel to download the file.
+          </p>
           <div className="flex gap-2">
             <Input
-              placeholder="owner/repository-name"
-              value={repoInput}
-              onChange={e => setRepoInput(e.target.value)}
-              className="h-9 font-mono text-sm flex-1"
+              placeholder="https://drive.google.com/…  or  https://www.dropbox.com/…"
+              value={downloadUrlInput}
+              onChange={e => setDownloadUrlInput(e.target.value)}
+              className="flex-1 font-mono text-xs"
             />
-            <Button variant="outline" className="h-9 shrink-0" onClick={() => saveRepo(repoInput)} disabled={!repoInput}>
+            <Button variant="outline" onClick={saveDownloadUrl} disabled={!downloadUrlInput.trim()} className="shrink-0">
               Save
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground mt-1.5">
-            Enter the GitHub path, e.g. <code className="bg-muted px-1 rounded font-mono">yourname/slalomstream</code>. The repo must have GitHub Releases published for version checking to work.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2 items-center">
-          <Button
-            variant="outline"
-            className="h-9 gap-2"
-            onClick={checkForUpdate}
-            isLoading={isChecking}
-            disabled={isChecking || applyStarted}
-          >
-            <RefreshCw className="w-4 h-4" />
-            Check for Updates
-          </Button>
-
-          {checkResult?.status === 'update_available' && !applyStarted && (
-            <Button variant="primary" className="h-9 gap-2" onClick={applyUpdate}>
-              <Download className="w-4 h-4" />
-              Apply Update to v{checkResult.latest}
-            </Button>
+          {downloadUrl && (
+            <a
+              href={downloadUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline mt-1"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              Open download location →
+            </a>
           )}
-
-          {checkResult && <div className="flex-1 flex justify-end">{statusBadge}</div>}
         </div>
 
-        {checkResult?.status === 'update_available' && checkResult.release_notes && (
-          <div className="bg-muted/50 rounded-xl p-3 border text-xs space-y-1">
-            <p className="font-bold">What's new in v{checkResult.latest}:</p>
-            <p className="text-muted-foreground whitespace-pre-wrap leading-relaxed">{checkResult.release_notes}</p>
-          </div>
-        )}
+        {/* ── ZIP Upload ───────────────────────────────────────────────── */}
+        <div className="space-y-3 border-t pt-4">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Apply Update ZIP</p>
 
-        {checkResult?.status === 'error' && (
-          <div className="flex items-start gap-2 p-3 bg-destructive/10 rounded-xl border border-destructive/20 text-xs text-destructive">
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>{checkResult.error}</span>
-          </div>
-        )}
-
-        {checkResult?.status === 'no_repo' && (
-          <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-700 text-xs text-amber-800 dark:text-amber-300">
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold">No repository configured</p>
-              <p className="mt-0.5">Save a GitHub repository path above to enable update checking. The codebase must be a git clone of that repo.</p>
-            </div>
-          </div>
-        )}
-
-        {(checkResult?.status === 'no_git' || checkResult?.status === 'no_remote') && (
-          <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-700 text-xs text-amber-800 dark:text-amber-300">
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold">{checkResult.status === 'no_git' ? 'git not available' : 'No git remote configured'}</p>
-              <p className="mt-0.5">{checkResult.message}</p>
-            </div>
-          </div>
-        )}
-
-        {applyStarted && (
-          restarting ? (
-            <div className="flex items-center gap-3 p-4 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl border border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 text-sm font-semibold">
-              <RefreshCw className="w-5 h-5 animate-spin shrink-0" />
-              <div>
-                <p>Update applied — server is restarting…</p>
-                <p className="font-normal text-xs mt-0.5">This page will reload automatically when the server is back online.</p>
+          {/* Steps */}
+          <div className="text-xs text-muted-foreground bg-muted/40 rounded-xl p-3 space-y-1.5">
+            {[
+              downloadUrl
+                ? <>Click <strong>Open download location</strong> above, download the ZIP file to this device.</>
+                : <>Download the latest ZIP from wherever it has been shared (Google Drive, Dropbox, USB, etc.).</>,
+              <>Click <strong>Upload ZIP file</strong> below and select the downloaded file.</>,
+              <>Review the version shown, then click <strong>Apply Update</strong>.</>,
+              <>The server restarts automatically — this page reloads when it&apos;s back.</>,
+            ].map((step, i) => (
+              <div key={i} className="flex gap-2.5 items-start">
+                <span className="w-4 h-4 rounded-full bg-primary/10 text-primary text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
+                <p>{step}</p>
               </div>
-            </div>
-          ) : (
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">Update Log</p>
-              <pre className="bg-muted rounded-xl p-3 text-[11px] font-mono overflow-y-auto max-h-60 whitespace-pre-wrap break-all">
-                {logContent || 'Starting…'}
-              </pre>
-            </div>
-          )
-        )}
-
-        {!applyStarted && (
-          <p className="text-xs text-muted-foreground border-t pt-3">
-            Requires the app to be installed via <code className="bg-muted px-1 rounded font-mono">git clone</code> and started with <code className="bg-muted px-1 rounded font-mono">start.sh</code> / <code className="bg-muted px-1 rounded font-mono">start.ps1</code>.
-          </p>
-        )}
-
-        {/* ── ZIP Upload Alternative ──────────────────────────────────────── */}
-        <div className="border-t pt-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <div className="h-px flex-1 bg-border" />
-            <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground px-2">or update by ZIP (no git required)</span>
-            <div className="h-px flex-1 bg-border" />
-          </div>
-
-          {/* How-to hint */}
-          <div className="text-xs text-muted-foreground space-y-1 bg-muted/40 rounded-xl p-3">
-            <p className="font-semibold text-foreground">How to update without GitHub</p>
-            <ol className="list-decimal list-inside space-y-0.5 pl-1">
-              <li>In Replit, click the <strong>⋮</strong> menu → <strong>Download as ZIP</strong></li>
-              <li>Upload that ZIP using the button below</li>
-              <li>Review what's inside, then click <strong>Apply Update</strong></li>
-              <li>The server restarts automatically — no commands needed</li>
-            </ol>
+            ))}
           </div>
 
           {zipRestarting ? (
@@ -1378,7 +1234,6 @@ function UpdatePanel() {
             </div>
           ) : (
             <>
-              {/* File picker */}
               <input
                 ref={zipInputRef}
                 type="file"
@@ -1411,7 +1266,6 @@ function UpdatePanel() {
                 )}
               </div>
 
-              {/* Scan result preview */}
               {zipScan && zipStatus === 'scanned' && (
                 <div className="p-3 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 space-y-2">
                   <div className="flex items-center gap-2">
@@ -1435,7 +1289,6 @@ function UpdatePanel() {
                 </div>
               )}
 
-              {/* Error */}
               {zipError && (
                 <div className="flex items-start gap-2 p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-300 text-xs">
                   <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />

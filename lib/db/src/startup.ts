@@ -17,6 +17,7 @@ const COLUMN_PATCHES: string[] = [
   `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS connection_mode text NOT NULL DEFAULT 'local'`,
   `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS public_url text`,
   `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS github_repo text`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS update_download_url text`,
   `ALTER TABLE officials_register ADD COLUMN IF NOT EXISTS pin text`,
   `ALTER TABLE officials_register ADD COLUMN IF NOT EXISTS judge_role text`,
   `ALTER TABLE officials_register ADD COLUMN IF NOT EXISTS is_admin boolean NOT NULL DEFAULT false`,
