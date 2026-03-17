@@ -47,3 +47,7 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Installer build artifacts
+installer/stage/
+SlalomStream-Setup.exe
