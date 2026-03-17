@@ -19,8 +19,8 @@ const staticDir = process.env.STATIC_DIR || path.resolve(process.cwd(), "public"
 
 if (serveStatic && existsSync(staticDir)) {
   app.use(express.static(staticDir));
-  // SPA fallback — all non-API routes serve index.html
-  app.get("*", (_req, res) => {
+  // SPA fallback — all non-API routes serve index.html (Express 5 wildcard syntax)
+  app.get("/{*path}", (_req, res) => {
     res.sendFile(path.join(staticDir, "index.html"));
   });
   console.log(`Serving static frontend from: ${staticDir}`);
