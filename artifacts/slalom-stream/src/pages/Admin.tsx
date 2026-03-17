@@ -1287,32 +1287,31 @@ function UpdatePanel() {
             </div>
           ) : (
             <>
-              {/* Auto-fetch when download URL is configured */}
-              {downloadUrl && (
-                <div className="p-3 bg-primary/5 border border-primary/20 rounded-xl space-y-2">
-                  <p className="text-xs font-semibold">Automatic update</p>
-                  <p className="text-xs text-muted-foreground">Fetch and prepare the update directly from the configured download URL — no file download or upload needed.</p>
-                  <Button
-                    variant="primary"
-                    onClick={fetchUpdate}
-                    disabled={zipStatus === 'fetching' || zipStatus === 'uploading' || zipStatus === 'applying'}
-                    isLoading={zipStatus === 'fetching'}
-                    className="h-9 gap-2 w-full"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                    {zipStatus === 'fetching' ? 'Downloading update…' : 'Fetch & prepare update'}
-                  </Button>
-                </div>
-              )}
+              {/* Auto-fetch — always visible, disabled until URL is configured */}
+              <div className="p-3 bg-primary/5 border border-primary/20 rounded-xl space-y-2">
+                <p className="text-xs font-semibold">Automatic update</p>
+                <p className="text-xs text-muted-foreground">
+                  {downloadUrl
+                    ? 'Fetch and prepare the update directly from the configured download URL — no file download or upload needed.'
+                    : 'Set a download URL above first (or click "Use this app as update source"), then use this button to fetch updates automatically.'}
+                </p>
+                <Button
+                  variant="primary"
+                  onClick={fetchUpdate}
+                  disabled={!downloadUrl || zipStatus === 'fetching' || zipStatus === 'uploading' || zipStatus === 'applying'}
+                  isLoading={zipStatus === 'fetching'}
+                  className="h-9 gap-2 w-full"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  {zipStatus === 'fetching' ? 'Downloading update…' : 'Fetch & prepare update'}
+                </Button>
+              </div>
 
-              {/* Divider when both options available */}
-              {downloadUrl && (
-                <div className="flex items-center gap-2">
-                  <div className="h-px flex-1 bg-border" />
-                  <span className="text-[10px] text-muted-foreground uppercase tracking-widest">or upload manually</span>
-                  <div className="h-px flex-1 bg-border" />
-                </div>
-              )}
+              <div className="flex items-center gap-2">
+                <div className="h-px flex-1 bg-border" />
+                <span className="text-[10px] text-muted-foreground uppercase tracking-widest">or upload manually</span>
+                <div className="h-px flex-1 bg-border" />
+              </div>
 
               <input
                 ref={zipInputRef}
