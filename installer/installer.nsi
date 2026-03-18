@@ -3,7 +3,7 @@
 ; Run build-installer.sh first to stage all required files.
 
 !define APP_NAME    "SlalomStream"
-!define APP_VERSION "1.6.0"
+!define APP_VERSION "1.6.3"
 !define PUBLISHER   "NZTWSA"
 !define REG_KEY     "Software\Microsoft\Windows\CurrentVersion\Uninstall\SlalomStream"
 
@@ -18,6 +18,10 @@ SetCompressor lzma
 !include "MUI2.nsh"
 !include "nsDialogs.nsh"
 !include "LogicLib.nsh"
+
+; ── Custom Icons ────────────────────────────────────────────────────────────────
+!define MUI_ICON    "slalomstream.ico"
+!define MUI_UNICON  "slalomstream.ico"
 
 ; ── MUI Settings ──────────────────────────────────────────────────────────────
 !define MUI_ABORTWARNING
@@ -90,6 +94,7 @@ Section "SlalomStream" SecMain
   File "stage/version.json"
   File "stage/SlalomStream.bat"
   File "stage/SlalomStream-Launch.bat"
+  File "slalomstream.ico"
 
   ; ── API server bundle ──
   SetOutPath "$INSTDIR\artifacts\api-server\dist"
@@ -113,15 +118,18 @@ Section "SlalomStream" SecMain
   SetShellVarContext all
 
   CreateShortcut "$DESKTOP\SlalomStream.lnk" \
-    "$INSTDIR\SlalomStream-Launch.bat" "" "" 0 SW_SHOWNORMAL \
+    "$INSTDIR\SlalomStream-Launch.bat" "" \
+    "$INSTDIR\slalomstream.ico" 0 SW_SHOWNORMAL \
     "" "Start SlalomStream and open in browser"
 
   CreateDirectory "$SMPROGRAMS\SlalomStream"
   CreateShortcut "$SMPROGRAMS\SlalomStream\SlalomStream.lnk" \
-    "$INSTDIR\SlalomStream-Launch.bat" "" "" 0 SW_SHOWNORMAL \
+    "$INSTDIR\SlalomStream-Launch.bat" "" \
+    "$INSTDIR\slalomstream.ico" 0 SW_SHOWNORMAL \
     "" "Start SlalomStream and open in browser"
   CreateShortcut "$SMPROGRAMS\SlalomStream\SlalomStream Server (console).lnk" \
-    "$INSTDIR\SlalomStream.bat" "" "" 0 SW_SHOWNORMAL \
+    "$INSTDIR\SlalomStream.bat" "" \
+    "$INSTDIR\slalomstream.ico" 0 SW_SHOWNORMAL \
     "" "Start SlalomStream server (shows console window)"
   CreateShortcut "$SMPROGRAMS\SlalomStream\Uninstall SlalomStream.lnk" \
     "$INSTDIR\Uninstall.exe"
