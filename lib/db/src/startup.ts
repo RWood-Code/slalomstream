@@ -2,13 +2,126 @@
  * Startup checks — run once when the API server starts.
  * Safe to call on every boot: idempotent, non-destructive.
  *
- * 1. Ensures the DB schema has all required columns (ALTER TABLE IF NOT EXISTS).
- * 2. Seeds the NZTWSA officials register if the table is empty.
+ * 1. Creates all tables if they don't exist (needed for fresh PGlite offline installs).
+ * 2. Ensures the DB schema has all required columns (ALTER TABLE ADD COLUMN IF NOT EXISTS).
+ * 3. Seeds the NZTWSA officials register if the table is empty.
+ * 4. Ensures Richard Wood has admin access (pin 2452).
+ * 5. Ensures the app_settings default row exists.
  */
 
 import { sql } from "drizzle-orm";
 import { db } from "./index.js";
 import { officialsRegisterTable } from "./schema/officials_register.js";
+
+// ─── Table creation ────────────────────────────────────────────────────────────
+// Each CREATE TABLE is wrapped in IF NOT EXISTS so it is safely skipped when
+// the table already exists (cloud PostgreSQL, or subsequent local restarts).
+const CREATE_TABLES: string[] = [
+  `CREATE TABLE IF NOT EXISTS tournaments (
+    id          serial PRIMARY KEY,
+    name        text NOT NULL,
+    status      text NOT NULL DEFAULT 'upcoming',
+    judge_count integer NOT NULL DEFAULT 1,
+    tournament_class text NOT NULL DEFAULT 'G',
+    event_id    text,
+    event_sub_id text,
+    region      text,
+    num_rounds  integer NOT NULL DEFAULT 2,
+    admin_pin   text,
+    notes       text,
+    is_test     boolean NOT NULL DEFAULT false,
+    created_at  timestamp NOT NULL DEFAULT now(),
+    updated_at  timestamp NOT NULL DEFAULT now()
+  )`,
+  `CREATE TABLE IF NOT EXISTS officials_register (
+    id           serial PRIMARY KEY,
+    first_name   text NOT NULL,
+    surname      text NOT NULL,
+    region       text NOT NULL,
+    financial    boolean NOT NULL DEFAULT false,
+    slalom_grade text,
+    slalom_notes text,
+    is_active    boolean NOT NULL DEFAULT true,
+    pin          text,
+    judge_role   text,
+    is_admin     boolean NOT NULL DEFAULT false,
+    created_at   timestamp NOT NULL DEFAULT now()
+  )`,
+  `CREATE TABLE IF NOT EXISTS app_settings (
+    id                       integer PRIMARY KEY DEFAULT 1,
+    admin_pin                text,
+    waterskiconnect_enabled  boolean NOT NULL DEFAULT false,
+    waterskiconnect_url      text,
+    waterskiconnect_token    text,
+    surepath_event_name      text,
+    surepath_event_sub_id    text,
+    surepath_observer_pin    text,
+    surepath_enabled         boolean NOT NULL DEFAULT false,
+    active_tournament_id     integer,
+    connection_mode          text NOT NULL DEFAULT 'local',
+    public_url               text,
+    github_repo              text,
+    update_download_url      text
+  )`,
+  `CREATE TABLE IF NOT EXISTS judges (
+    id            serial PRIMARY KEY,
+    tournament_id integer NOT NULL,
+    name          text NOT NULL,
+    judge_role    text NOT NULL,
+    judge_level   text,
+    pin           text,
+    is_active     boolean NOT NULL DEFAULT true,
+    created_at    timestamp NOT NULL DEFAULT now()
+  )`,
+  `CREATE TABLE IF NOT EXISTS skiers (
+    id            serial PRIMARY KEY,
+    tournament_id integer NOT NULL,
+    first_name    text NOT NULL,
+    surname       text NOT NULL,
+    division      text,
+    skier_id      text,
+    pin           text,
+    is_financial  boolean NOT NULL DEFAULT true,
+    created_at    timestamp NOT NULL DEFAULT now()
+  )`,
+  `CREATE TABLE IF NOT EXISTS passes (
+    id            serial PRIMARY KEY,
+    tournament_id integer NOT NULL,
+    skier_id      integer NOT NULL,
+    skier_name    text NOT NULL,
+    division      text,
+    rope_length   real NOT NULL,
+    speed_kph     real,
+    round_number  integer NOT NULL DEFAULT 1,
+    buoys_scored  real,
+    status        text NOT NULL DEFAULT 'pending',
+    start_time    timestamp,
+    end_time      timestamp,
+    notes         text,
+    created_at    timestamp NOT NULL DEFAULT now()
+  )`,
+  `CREATE TABLE IF NOT EXISTS judge_scores (
+    id            serial PRIMARY KEY,
+    pass_id       integer NOT NULL,
+    tournament_id integer NOT NULL,
+    judge_id      integer,
+    judge_name    text NOT NULL,
+    judge_role    text NOT NULL,
+    judge_level   text,
+    pass_score    text NOT NULL,
+    submitted_at  timestamp NOT NULL DEFAULT now()
+  )`,
+];
+
+async function createTablesIfNotExist() {
+  for (const stmt of CREATE_TABLES) {
+    await db.execute(sql.raw(stmt));
+  }
+  // Ensure the single app_settings row always exists
+  await db.execute(sql.raw(
+    `INSERT INTO app_settings (id) VALUES (1) ON CONFLICT DO NOTHING`
+  ));
+}
 
 // ─── Schema patches ────────────────────────────────────────────────────────────
 // Add any new columns here as the schema evolves. Each statement is wrapped in
@@ -105,7 +218,8 @@ const OFFICIALS = [
   { first_name: "Genevieve", surname: "Wallis",      region: "Canterbury",  financial: true,  slalom_grade: null },
   { first_name: "Katrina",   surname: "Wallis",      region: "Canterbury",  financial: true,  slalom_grade: null },
   { first_name: "Steve",     surname: "Wayne",       region: "Canterbury",  financial: true,  slalom_grade: "J2*" },
-  { first_name: "Richard",   surname: "Wood",        region: "Canterbury",  financial: true,  slalom_grade: "J2" },
+  // Richard Wood — master admin (pin 2452, full admin access)
+  { first_name: "Richard",   surname: "Wood",        region: "Canterbury",  financial: true,  slalom_grade: "J2", pin: "2452", is_admin: true },
   { first_name: "Sammy",     surname: "Wood",        region: "Canterbury",  financial: true,  slalom_grade: null },
   // Central
   { first_name: "Nick",      surname: "Bakker",      region: "Central",     financial: true,  slalom_grade: "J2*" },
@@ -179,7 +293,7 @@ const OFFICIALS = [
   { first_name: "Hank",      surname: "Wortman",     region: "Waikato",     financial: true,  slalom_grade: "J2*" },
 ];
 
-// ─── Seed officials if empty ───────────────────────────────────────────────────
+// ─── Seed officials if table is empty ─────────────────────────────────────────
 async function seedOfficialsIfEmpty() {
   const existing = await db.select().from(officialsRegisterTable).limit(1);
   if (existing.length > 0) return;
@@ -191,11 +305,25 @@ async function seedOfficialsIfEmpty() {
   console.log(`[Startup] Seeded ${OFFICIALS.length} officials.`);
 }
 
+// ─── Ensure Richard Wood always has admin access ───────────────────────────────
+// This runs on every boot so that even if the database was seeded from an older
+// version (without the pin / is_admin fields), Richard still gets full access.
+async function ensureMasterAdmin() {
+  await db.execute(sql.raw(
+    `UPDATE officials_register
+        SET pin = '2452', is_admin = true
+      WHERE first_name = 'Richard' AND surname = 'Wood'`
+  ));
+}
+
 // ─── Public entry point ────────────────────────────────────────────────────────
 export async function runStartupChecks() {
   try {
+    await createTablesIfNotExist();
     await applySchemaPatches();
     await seedOfficialsIfEmpty();
+    await ensureMasterAdmin();
+    console.log("[Startup] Database ready.");
   } catch (err) {
     console.error("[Startup] Startup checks failed (non-fatal):", err);
   }

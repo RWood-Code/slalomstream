@@ -17,7 +17,9 @@ export let pool: InstanceType<typeof Pool> | null = null;
 
 function createDb() {
   if (process.env.DB_DATA_DIR) {
-    const client = new PGlite(`file:${process.env.DB_DATA_DIR}`);
+    // Pass the path directly — do NOT use the "file:" URI prefix on Windows
+    // (PGlite would try to mkdir a folder literally named "file:C:\...")
+    const client = new PGlite(process.env.DB_DATA_DIR);
     return drizzlePglite({ client, schema });
   } else if (process.env.DATABASE_URL) {
     pool = new Pool({ connectionString: process.env.DATABASE_URL });

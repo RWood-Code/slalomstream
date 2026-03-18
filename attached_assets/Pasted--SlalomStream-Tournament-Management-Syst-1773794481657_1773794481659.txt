@@ -1,0 +1,156 @@
+
+ ===================================================
+   SlalomStream - Tournament Management System
+ ===================================================
+
+ Starting on port 3000...
+
+ Judges and scoreboard: open a browser on any device connected
+ to the same WiFi network and go to:
+
+   http://(this-computer-IP):3000
+
+ On this computer: http://localhost:3000
+
+ Press Ctrl+C to stop the server.
+
+Serving static frontend from: C:\Program Files\SlalomStream\artifacts\slalom-stream\dist\public
+Server listening on port 3000
+[Startup] Startup checks failed (non-fatal): t [Error]: Failed query: select "id", "first_name", "surname", "region", "financial", "slalom_grade", "slalom_notes", "is_active", "pin", "judge_role", "is_admin", "created_at" from "officials_register" limit $1
+params: 1
+    at GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37270)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async GS.execute (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44897)
+    at async a2e (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:94:34890)
+    at async r1 (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:94:35178) {
+  query: 'select "id", "first_name", "surname", "region", "financial", "slalom_grade", "slalom_notes", "is_active", "pin", "judge_role", "is_admin", "created_at" from "officials_register" limit $1',
+  params: [ 1 ],
+  cause: Error: EINVAL: invalid argument, mkdir 'C:\Program Files\SlalomStream\file:C:\Program Files\SlalomStream\data'
+      at Object.mkdirSync (node:fs:1372:26)
+      at new Sa (C:\Program Files\SlalomStream\node_modules\@electric-sql\pglite\dist\index.cjs:2:67633)
+      at ts (C:\Program Files\SlalomStream\node_modules\@electric-sql\pglite\dist\index.cjs:11:8222)
+      at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async le._s (C:\Program Files\SlalomStream\node_modules\@electric-sql\pglite\dist\index.cjs:13:277128)
+      at async le._checkReady (C:\Program Files\SlalomStream\node_modules\@electric-sql\pglite\dist\index.cjs:13:273933)
+      at async le.query (C:\Program Files\SlalomStream\node_modules\@electric-sql\pglite\dist\index.cjs:11:257)
+      at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44869
+      at async GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37245) {
+    errno: -4071,
+    code: 'EINVAL',
+    syscall: 'mkdir',
+    path: 'C:\\Program Files\\SlalomStream\\file:C:\\Program Files\\SlalomStream\\data'
+  }
+}
+[SurePath] Startup error: t [Error]: Failed query: select "id", "admin_pin", "waterskiconnect_enabled", "waterskiconnect_url", "waterskiconnect_token", "surepath_event_name", "surepath_event_sub_id", "surepath_observer_pin", "surepath_enabled", "active_tournament_id", "connection_mode", "public_url", "github_repo", "update_download_url" from "app_settings" where "app_settings"."id" = $1
+params: 1
+    at GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37270)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async GS.execute (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44897)
+    at async qA (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:179618) {
+  query: 'select "id", "admin_pin", "waterskiconnect_enabled", "waterskiconnect_url", "waterskiconnect_token", "surepath_event_name", "surepath_event_sub_id", "surepath_observer_pin", "surepath_enabled", "active_tournament_id", "connection_mode", "public_url", "github_repo", "update_download_url" from "app_settings" where "app_settings"."id" = $1',
+  params: [ 1 ],
+  cause: Error: EINVAL: invalid argument, mkdir 'C:\Program Files\SlalomStream\file:C:\Program Files\SlalomStream\data'
+      at Object.mkdirSync (node:fs:1372:26)
+      at new Sa (C:\Program Files\SlalomStream\node_modules\@electric-sql\pglite\dist\index.cjs:2:67633)
+      at ts (C:\Program Files\SlalomStream\node_modules\@electric-sql\pglite\dist\index.cjs:11:8222)
+      at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async le._s (C:\Program Files\SlalomStream\node_modules\@electric-sql\pglite\dist\index.cjs:13:277128)
+      at async le._checkReady (C:\Program Files\SlalomStream\node_modules\@electric-sql\pglite\dist\index.cjs:13:273933)
+      at async le.query (C:\Program Files\SlalomStream\node_modules\@electric-sql\pglite\dist\index.cjs:11:257)
+      at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44869
+      at async GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37245) {
+    errno: -4071,
+    code: 'EINVAL',
+    syscall: 'mkdir',
+    path: 'C:\\Program Files\\SlalomStream\\file:C:\\Program Files\\SlalomStream\\data'
+  }
+}
+Error: Failed query: select "id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at" from "tournaments" order by "tournaments"."created_at"
+params:
+    at GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37270)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async GS.execute (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44897)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:172397
+Error: Failed query: select "id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at" from "tournaments" order by "tournaments"."created_at"
+params:
+    at GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37270)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async GS.execute (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44897)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:172397
+Error: Failed query: select "id", "first_name", "surname", "region", "financial", "slalom_grade", "slalom_notes", "is_active", "pin", "judge_role", "is_admin", "created_at" from "officials_register" order by "officials_register"."surname" asc, "officials_register"."first_name" asc
+params:
+    at GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37270)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async GS.execute (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44897)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:186410
+Error: Failed query: select "id", "first_name", "surname", "region", "financial", "slalom_grade", "slalom_notes", "is_active", "pin", "judge_role", "is_admin", "created_at" from "officials_register" order by "officials_register"."surname" asc, "officials_register"."first_name" asc
+params:
+    at GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37270)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async GS.execute (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44897)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:186410
+Error: Failed query: select "id", "admin_pin", "waterskiconnect_enabled", "waterskiconnect_url", "waterskiconnect_token", "surepath_event_name", "surepath_event_sub_id", "surepath_observer_pin", "surepath_enabled", "active_tournament_id", "connection_mode", "public_url", "github_repo", "update_download_url" from "app_settings" where "app_settings"."id" = $1
+params: 1
+    at GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37270)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async GS.execute (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44897)
+    at async k1 (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:182373)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:183910
+Error: Failed query: select "id", "admin_pin", "waterskiconnect_enabled", "waterskiconnect_url", "waterskiconnect_token", "surepath_event_name", "surepath_event_sub_id", "surepath_observer_pin", "surepath_enabled", "active_tournament_id", "connection_mode", "public_url", "github_repo", "update_download_url" from "app_settings" where "app_settings"."id" = $1
+params: 1
+    at GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37270)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async GS.execute (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44897)
+    at async k1 (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:182373)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:183910
+Error: Failed query: select "id", "admin_pin", "waterskiconnect_enabled", "waterskiconnect_url", "waterskiconnect_token", "surepath_event_name", "surepath_event_sub_id", "surepath_observer_pin", "surepath_enabled", "active_tournament_id", "connection_mode", "public_url", "github_repo", "update_download_url" from "app_settings" where "app_settings"."id" = $1
+params: 1
+    at GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37270)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async GS.execute (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44897)
+    at async k1 (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:182373)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:183910
+Error: Failed query: select "id", "admin_pin", "waterskiconnect_enabled", "waterskiconnect_url", "waterskiconnect_token", "surepath_event_name", "surepath_event_sub_id", "surepath_observer_pin", "surepath_enabled", "active_tournament_id", "connection_mode", "public_url", "github_repo", "update_download_url" from "app_settings" where "app_settings"."id" = $1
+params: 1
+    at GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37270)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async GS.execute (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44897)
+    at async k1 (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:182373)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:183910
+Error: Failed query: select "id", "admin_pin", "waterskiconnect_enabled", "waterskiconnect_url", "waterskiconnect_token", "surepath_event_name", "surepath_event_sub_id", "surepath_observer_pin", "surepath_enabled", "active_tournament_id", "connection_mode", "public_url", "github_repo", "update_download_url" from "app_settings" where "app_settings"."id" = $1
+params: 1
+    at GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37270)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async GS.execute (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44897)
+    at async k1 (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:182373)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:183910
+Error: Failed query: select "id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at" from "tournaments" order by "tournaments"."created_at"
+params:
+    at GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37270)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async GS.execute (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44897)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:172397
+Error: Failed query: select "id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at" from "tournaments" order by "tournaments"."created_at"
+params:
+    at GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37270)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async GS.execute (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44897)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:172397
+Error: Failed query: insert into "tournaments" ("id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at") values (default, $1, default, $2, $3, default, default, default, $4, default, default, $5, default, default) returning "id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at"
+params: test,3,L,2,true
+    at GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37270)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async GS.execute (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44897)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:172541
+Error: Failed query: insert into "tournaments" ("id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at") values (default, $1, default, $2, $3, default, default, default, $4, default, default, $5, default, default) returning "id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at"
+params: test,3,L,2,true
+    at GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37270)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async GS.execute (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44897)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:172541
+Error: Failed query: insert into "tournaments" ("id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at") values (default, $1, default, $2, $3, default, default, default, $4, default, default, $5, default, default) returning "id", "name", "status", "judge_count", "tournament_class", "event_id", "event_sub_id", "region", "num_rounds", "admin_pin", "notes", "is_test", "created_at", "updated_at"
+params: test,3,L,2,true
+    at GS.queryWithCache (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:37270)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async GS.execute (C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:66:44897)
+    at async C:\Program Files\SlalomStream\artifacts\api-server\dist\index.cjs:239:172541
