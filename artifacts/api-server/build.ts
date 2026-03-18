@@ -56,6 +56,12 @@ async function buildAll() {
       !(pkg.dependencies?.[dep]?.startsWith("workspace:")),
   );
 
+  // PGlite is a workspace-dependency of @workspace/db (not listed in api-server's
+  // package.json), so it won't appear in `externals` above. Force it external so
+  // that the WASM-heavy package is loaded from node_modules at runtime rather than
+  // inlined into the bundle.
+  const forceExternal = ["@electric-sql/pglite"];
+
   await esbuild({
     entryPoints: [path.resolve(__dirname, "src/index.ts")],
     platform: "node",
@@ -66,7 +72,7 @@ async function buildAll() {
       "process.env.NODE_ENV": '"production"',
     },
     minify: true,
-    external: externals,
+    external: [...externals, ...forceExternal],
     logLevel: "info",
   });
 }
