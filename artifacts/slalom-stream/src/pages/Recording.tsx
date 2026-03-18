@@ -924,15 +924,17 @@ export default function Recording() {
   const { data: tournament } = useGetTournament(activeTournamentId || 0, { query: { enabled: !!activeTournamentId } });
   const { data: skiers } = useListSkiers(activeTournamentId || 0, { query: { enabled: !!activeTournamentId } });
   const { data: passes } = useListPasses(activeTournamentId || 0, {
-    query: { enabled: !!activeTournamentId },
-    request: { refetchInterval: 3000 } as any,
+    query: { enabled: !!activeTournamentId, refetchInterval: 2000 },
   });
 
-  const activePass = passes?.find(p => p.status === 'pending');
-  const recentPasses = passes
-    ?.filter(p => p.status !== 'pending')
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    .slice(0, 8) || [];
+  const activePass = React.useMemo(() => passes?.find(p => p.status === 'pending') ?? null, [passes]);
+  const recentPasses = React.useMemo(() =>
+    passes
+      ?.filter(p => p.status !== 'pending')
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 8) ?? [],
+    [passes]
+  );
 
   const [skierId, setSkierId] = useState('');
   const [rope, setRope] = useState('18.25');
@@ -951,6 +953,8 @@ export default function Recording() {
   const folders = useSaveFolders();
   const video = useVideoRecorder();
   const prevActivePassId = useRef<number | null>(null);
+  // Capture skier name at pass-start so replay panel has it after pass ends
+  const replaySkierName = useRef<string | undefined>(undefined);
 
   // Auto-start recording when pass starts, auto-stop when it ends
   useEffect(() => {
@@ -958,6 +962,7 @@ export default function Recording() {
     const prev = prevActivePassId.current;
 
     if (curr && !prev && video.mode === 'preview') {
+      replaySkierName.current = activePass?.skier_name ?? undefined;
       video.startRecording();
       toast({ title: "Recording started", description: activePass?.skier_name });
     } else if (!curr && prev && video.mode === 'recording') {
@@ -1232,7 +1237,7 @@ export default function Recording() {
         open={video.showReplay}
         onClose={video.dismissReplay}
         onSave={async () => {
-          const skierName = activePass?.skier_name ?? undefined;
+          const skierName = replaySkierName.current;
           const hasFolders = folders.primaryHandle || folders.backupHandle;
           await video.saveRecording(skierName, hasFolders ? folders.saveToFolders : null);
           if (hasFolders) {
@@ -1242,7 +1247,7 @@ export default function Recording() {
             toast({ title: 'Recording saved', description: parts.join(' · ') });
           }
         }}
-        skierName={activePass?.skier_name}
+        skierName={replaySkierName.current}
       />
     </div>
   );
