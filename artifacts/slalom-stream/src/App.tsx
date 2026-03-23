@@ -4,6 +4,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 import { AppLayout } from "@/components/layout/AppLayout";
+import { PublicLayout } from "@/components/layout/PublicLayout";
 import Home from "@/pages/Home";
 import Recording from "@/pages/Recording";
 import Judging from "@/pages/Judging";
@@ -26,17 +27,23 @@ const queryClient = new QueryClient({
 function Router() {
   return (
     <Switch>
-      {/* Fullscreen live view — no nav, no layout wrapper */}
+      {/* ── Public pages — no nav, safe to share with spectators ── */}
+      {/* Fullscreen TV view */}
       <Route path="/live" component={Live} />
+      {/* Live scoreboard with minimal branded header */}
+      <Route path="/scoreboard">
+        <PublicLayout>
+          <Scoreboard />
+        </PublicLayout>
+      </Route>
 
-      {/* All other routes inside AppLayout */}
+      {/* ── Operator pages — full nav sidebar ── */}
       <Route>
         <AppLayout>
           <Switch>
             <Route path="/" component={Home} />
             <Route path="/recording" component={Recording} />
             <Route path="/judging" component={Judging} />
-            <Route path="/scoreboard" component={Scoreboard} />
             <Route path="/officials" component={Officials} />
             <Route path="/admin" component={Admin} />
             <Route path="/help" component={Help} />
