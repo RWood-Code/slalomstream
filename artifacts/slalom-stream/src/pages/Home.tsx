@@ -3,8 +3,8 @@ import { useListTournaments, useCreateTournament } from '@workspace/api-client-r
 import { useAppStore } from '@/lib/store';
 import { useLocation } from 'wouter';
 import { Card, Button, Badge, PageHeader, Dialog, Input, Select } from '@/components/ui/shared';
-import { Trophy, CalendarPlus, ChevronRight, Activity, Calendar, FlaskConical, Eye, EyeOff } from 'lucide-react';
-import { TOURNAMENT_CLASSES } from '@/lib/utils';
+import { Trophy, CalendarPlus, ChevronRight, Activity, Calendar, FlaskConical, Eye, EyeOff, Search, User } from 'lucide-react';
+import { TOURNAMENT_CLASSES, formatRope, getRopeColour } from '@/lib/utils';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 
 export default function Home() {
@@ -15,6 +15,18 @@ export default function Home() {
   const [showTest, setShowTest] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [formData, setFormData] = useState({ name: '', class: 'L', judges: 3, rounds: 2, is_test: false });
+  const [skierSearch, setSkierSearch] = useState('');
+  const [skierSearchInput, setSkierSearchInput] = useState('');
+
+  const { data: skierResults, isFetching: skierFetching } = useQuery({
+    queryKey: ['/api/passes/search', skierSearch],
+    queryFn: async () => {
+      if (!skierSearch || skierSearch.length < 2) return [];
+      const r = await fetch(`/api/passes/search?q=${encodeURIComponent(skierSearch)}`);
+      return r.json() as Promise<any[]>;
+    },
+    enabled: skierSearch.length >= 2,
+  });
 
   const { data: tournaments, isLoading } = useQuery({
     queryKey: ['/api/tournaments', showTest],
@@ -168,6 +180,72 @@ export default function Home() {
               );
             })}
           </div>
+        )}
+      </div>
+
+      {/* ── Skier History Search ── */}
+      <div>
+        <PageHeader title="Skier History" subtitle="Search for a skier's pass history across all tournaments." />
+        <form
+          onSubmit={e => { e.preventDefault(); setSkierSearch(skierSearchInput); }}
+          className="flex gap-2 mb-4"
+        >
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Skier name…"
+              value={skierSearchInput}
+              onChange={e => setSkierSearchInput(e.target.value)}
+              className="w-full h-10 pl-9 pr-3 rounded-xl border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+          </div>
+          <Button type="submit" variant="primary" size="sm">Search</Button>
+        </form>
+
+        {skierSearch.length >= 2 && (
+          skierFetching ? (
+            <div className="space-y-2">
+              {[1, 2, 3].map(i => <div key={i} className="h-14 bg-muted animate-pulse rounded-xl" />)}
+            </div>
+          ) : !skierResults || skierResults.length === 0 ? (
+            <Card className="p-8 text-center border-dashed">
+              <User className="w-10 h-10 mx-auto text-muted-foreground opacity-30 mb-3" />
+              <p className="font-semibold text-muted-foreground">No passes found for "{skierSearch}"</p>
+            </Card>
+          ) : (
+            <div className="space-y-2">
+              {skierResults.map((p: any) => {
+                const rc = p.rope_length ? getRopeColour(p.rope_length) : null;
+                return (
+                  <Card key={p.id} className="p-3 flex items-center gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-sm leading-none">{p.skier_name}</p>
+                      <p className="text-[11px] text-muted-foreground font-semibold mt-0.5 flex items-center gap-1.5 flex-wrap">
+                        R{p.round_number}
+                        {p.speed_kph && <span>· {p.speed_kph}kph</span>}
+                        {rc && p.rope_length && (
+                          <span
+                            className="inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold"
+                            style={{ background: rc.bg, color: rc.text, borderColor: rc.border }}
+                          >
+                            {formatRope(p.rope_length)}
+                          </span>
+                        )}
+                        {p.tournament_id && <span className="text-muted-foreground">· T#{p.tournament_id}</span>}
+                      </p>
+                    </div>
+                    {p.buoys_scored !== null && (
+                      <div className="bg-primary/10 text-primary px-3 py-1.5 rounded-xl text-center shrink-0">
+                        <p className="font-display font-black text-xl leading-none">{p.buoys_scored}</p>
+                        <p className="text-[9px] uppercase font-bold tracking-wider opacity-70">buoys</p>
+                      </div>
+                    )}
+                  </Card>
+                );
+              })}
+            </div>
+          )
         )}
       </div>
 

@@ -114,3 +114,17 @@ export function formatSpeed(speed: number | null | undefined): string {
   if (!speed) return '—';
   return `${speed}kph`;
 }
+
+/**
+ * Suggest the next rope length based on the skier's last pass.
+ * IWWF progression: if the skier completed a full pass (6 buoys), shorten rope.
+ * Otherwise repeat the same rope.
+ */
+export function suggestNextRope(lastPass: { buoys_scored: number | null; rope_length: number } | null): number | null {
+  if (!lastPass) return null;
+  if ((lastPass.buoys_scored ?? 0) >= 6) {
+    const idx = ROPE_LENGTHS.indexOf(lastPass.rope_length);
+    if (idx >= 0 && idx < ROPE_LENGTHS.length - 1) return ROPE_LENGTHS[idx + 1];
+  }
+  return lastPass.rope_length;
+}

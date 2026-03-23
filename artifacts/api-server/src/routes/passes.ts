@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { passesTable, judgeScoresTable, tournamentsTable, insertPassSchema } from "@workspace/db";
-import { eq, desc, and, inArray } from "drizzle-orm";
+import { eq, desc, and, inArray, ilike } from "drizzle-orm";
 
 const ALL_SCORING_ROLES = ['judge_a', 'judge_b', 'judge_c', 'judge_d', 'judge_e'];
 function getScoringRoles(judgeCount: number): string[] {
@@ -24,6 +24,20 @@ router.post("/", async (req, res) => {
 });
 
 export const passRouter = Router();
+
+// GET /api/passes/search?q=skierName — search passes across all tournaments
+passRouter.get("/search", async (req, res) => {
+  const q = String(req.query.q ?? '').trim();
+  if (!q || q.length < 2) return res.json([]);
+
+  const passes = await db
+    .select()
+    .from(passesTable)
+    .where(ilike(passesTable.skier_name, `%${q}%`))
+    .orderBy(desc(passesTable.created_at))
+    .limit(50);
+  res.json(passes);
+});
 
 passRouter.get("/:id", async (req, res) => {
   const id = parseInt(req.params.id);
@@ -62,6 +76,27 @@ passRouter.put("/:id", async (req, res) => {
   const [pass] = await db.update(passesTable).set(body).where(eq(passesTable.id, id)).returning();
   if (!pass) return res.status(404).json({ error: "Not found" });
   res.json(pass);
+});
+
+// POST /api/passes/:id/flag — append a FALL or GATE MISS flag to pass notes
+passRouter.post("/:id/flag", async (req, res) => {
+  const id = parseInt(req.params.id);
+  const { flag } = req.body as { flag: string };
+  if (!flag) return res.status(400).json({ error: "flag required" });
+
+  const [pass] = await db.select().from(passesTable).where(eq(passesTable.id, id));
+  if (!pass) return res.status(404).json({ error: "Not found" });
+
+  const ts = new Date().toLocaleTimeString('en-NZ', { hour: '2-digit', minute: '2-digit' });
+  const entry = `[${ts}] ${flag}`;
+  const newNotes = pass.notes ? `${pass.notes}\n${entry}` : entry;
+
+  const [updated] = await db
+    .update(passesTable)
+    .set({ notes: newNotes })
+    .where(eq(passesTable.id, id))
+    .returning();
+  res.json(updated);
 });
 
 passRouter.delete("/:id", async (req, res) => {

@@ -7,11 +7,11 @@ import {
 import { Card, Button, Input, Select, Badge } from '@/components/ui/shared';
 import {
   ShieldAlert, CheckCircle2, RefreshCw, Play, Square,
-  ChevronDown, ChevronUp, Edit2, Clock, AlertCircle, Pencil, X
+  ChevronDown, ChevronUp, Edit2, Clock, AlertCircle, Pencil, X, Lock, Unlock,
 } from 'lucide-react';
 import {
   VALID_IWWF_SCORES, getRopeColour, formatRope, ROPE_LENGTHS, SPEEDS, formatSpeed,
-  getJudgingPanel, getScoringRoles, collateScores, formatScoreDisplay,
+  getJudgingPanel, getScoringRoles, collateScores, formatScoreDisplay, suggestNextRope,
 } from '@/lib/utils';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
@@ -45,10 +45,23 @@ function StartPassPanel({ tournamentId }: { tournamentId: number }) {
     }
   });
 
+  const { data: passes } = useListPasses(tournamentId, { query: { enabled: !!tournamentId } });
+
   const [skierId, setSkierId] = useState('');
   const [rope, setRope] = useState('18.25');
   const [speed, setSpeed] = useState('55');
   const [round, setRound] = useState('1');
+
+  // Rope pre-fill: suggest next rope based on skier's last completed pass
+  useEffect(() => {
+    if (!skierId || !passes) return;
+    const skierPasses = (passes as any[])
+      .filter(p => String(p.skier_id) === skierId && p.status !== 'pending' && p.buoys_scored !== null)
+      .sort((a: any, b: any) => (b.id ?? 0) - (a.id ?? 0));
+    const last = skierPasses[0] ?? null;
+    const suggested = last ? suggestNextRope(last) : null;
+    if (suggested !== null) setRope(String(suggested));
+  }, [skierId]);
 
   const handleStart = () => {
     if (!skierId) return toast({ title: 'Select a skier', variant: 'destructive' });
@@ -559,11 +572,12 @@ export default function Judging() {
   const [selectedRole, setSelectedRole] = useState(preselectedRole ?? '');
   const [pin, setPin] = useState('');
   const [submittedScore, setSubmittedScore] = useState<string | null>(null);
+  const [scoreLocked, setScoreLocked] = useState(false);
   const [judgeAOpen, setJudgeAOpen] = useState(true);
 
   const activePass = passes?.find(p => p.status === 'pending');
   const activePassId = activePass?.id;
-  useEffect(() => { setSubmittedScore(null); }, [activePassId]);
+  useEffect(() => { setSubmittedScore(null); setScoreLocked(false); }, [activePassId]);
 
   if (!tournamentId) {
     return (
@@ -689,16 +703,19 @@ export default function Judging() {
   const handleScore = (scoreStr: string) => {
     if (!activePass || !activeJudgeName || !activeJudgeRole) return;
     setSubmittedScore(scoreStr);
-    submitMutation.mutate({
-      id: activePass.id,
-      data: {
-        tournament_id: tournamentId,
-        judge_id: activeJudgeId,
-        judge_name: activeJudgeName,
-        judge_role: activeJudgeRole,
-        pass_score: scoreStr,
-      }
-    });
+    submitMutation.mutate(
+      {
+        id: activePass.id,
+        data: {
+          tournament_id: tournamentId,
+          judge_id: activeJudgeId,
+          judge_name: activeJudgeName,
+          judge_role: activeJudgeRole,
+          pass_score: scoreStr,
+        }
+      },
+      { onSuccess: () => setScoreLocked(true) }
+    );
   };
 
   const ropeColour = activePass ? getRopeColour(activePass.rope_length) : null;
@@ -752,14 +769,41 @@ export default function Judging() {
       <div className="flex-1 px-3 py-3 max-w-2xl w-full mx-auto space-y-3">
         {activePass ? (
           <>
-            {submittedScore && (
-              <div className="flex items-center gap-2.5 px-4 py-2.5 bg-emerald-50 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-700 rounded-xl text-emerald-700 dark:text-emerald-300 font-semibold text-sm">
-                <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-emerald-500" />
-                Submitted: <span className="font-black text-base">{submittedScore === '6_no_gates' ? '6 (No Gates)' : submittedScore}</span>
-                <span className="text-xs opacity-70 ml-auto">Tap to change</span>
+            {scoreLocked && submittedScore ? (
+              <div className="space-y-3">
+                <div className="flex flex-col items-center justify-center p-6 bg-emerald-50 dark:bg-emerald-950/40 border-2 border-emerald-200 dark:border-emerald-700 rounded-2xl text-center gap-2">
+                  <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300">
+                    <Lock className="w-4 h-4" />
+                    <span className="text-xs font-bold uppercase tracking-widest">Score Locked</span>
+                  </div>
+                  <span className="font-display font-black text-6xl text-emerald-700 dark:text-emerald-300 leading-none">
+                    {submittedScore === '6_no_gates' ? '6*' : submittedScore}
+                  </span>
+                  {submittedScore === '6_no_gates' && (
+                    <span className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold">No Gates</span>
+                  )}
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Your score has been submitted. Ask the Chief Judge to authorise any correction.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setScoreLocked(false)}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-border text-muted-foreground text-sm font-semibold hover:border-primary/40 hover:text-primary transition-colors"
+                >
+                  <Unlock className="w-3.5 h-3.5" /> Change my score
+                </button>
               </div>
+            ) : (
+              <>
+                {submittedScore && !scoreLocked && (
+                  <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl text-amber-700 dark:text-amber-300 text-xs font-semibold">
+                    <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                    Changing from {submittedScore === '6_no_gates' ? '6 (No Gates)' : submittedScore} — select new score
+                  </div>
+                )}
+                <ScorePad onScore={handleScore} submittedScore={submittedScore} disabled={submitMutation.isPending} />
+              </>
             )}
-            <ScorePad onScore={handleScore} submittedScore={submittedScore} disabled={submitMutation.isPending} />
             {isController && (
               <Card className="overflow-hidden border-primary/20">
                 <button onClick={() => setJudgeAOpen(v => !v)}

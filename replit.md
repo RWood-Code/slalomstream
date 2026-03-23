@@ -15,11 +15,21 @@ Digital scorecard for professional slalom waterski tournaments. A clone of slalo
 - **Features**:
   - Tournament management (create/edit/delete, G/L/R/E class)
   - Skier roster management with divisions and PINs
-  - Pass recording (rope length, speed, round)
+  - Pass recording (rope length, speed, round) with rope pre-fill from last pass (`suggestNextRope`)
   - Multi-judge scoring with IWWF collation (1, 3, or 5 judges). Panel driven by tournament's `judge_count`: 1-judge (A is chief+boat), 3-judge (C is boat), 5-judge (E is boat). Only scoring-panel roles (judge_a–judge_e) count toward collation; chief_judge is oversight/correction only
+  - Judge score lock: after submission, ScorePad locks with a prominent "Score Locked" card + "Change my score" unlock button. Score resets on new pass
+  - Full judge status grid on Recording page: shows all expected judge slots (A/B/C/D/E/CJ) with real-time fill status — clock icon when pending, score + checkmark when submitted
+  - Fall/Gate-miss flag buttons during active pass: appends timestamped entry to pass notes via `POST /api/passes/:id/flag`
+  - Dispute review modal: clicking any recent pass card opens a modal showing all judge scores for that pass
+  - Rope pre-fill in both Recording.tsx and Judging.tsx StartPassPanel when a skier is selected
   - Judge PIN authentication
-  - Live spectator scoreboard (auto-refresh every 5s)
+  - Live spectator scoreboard (auto-refresh every 5s) with TV Mode, Print, CSV Export
+  - Scoreboard TV Mode: opens `/live` in a dedicated browser window
   - Admin panel (PIN-protected)
+  - Network status card in Admin: shows all local IP URLs with copy button (dark emerald card at the top)
+  - Server shutdown button in Admin: safely stops the API process
+  - DB backup on startup (offline Windows mode): timestamped copies of PGlite data dir, keeps last 5
+  - Skier History search on Home page: search passes across all tournaments via `GET /api/passes/search?q=`
   - Offline-capable (state stored in localStorage via Zustand persist)
 - **Recording save folders**: Persistent primary + backup folder pickers via File System Access API (IndexedDB-persisted `FileSystemDirectoryHandle`). Auto-saves to both on every recording; falls back to browser download if no folders set. `useSaveFolders` hook + `SaveFolderBar` component. IDB helpers (`openDirDB`, `idbGetDir`, `idbSetDir`, `idbDeleteDir`) in Recording.tsx.
 - **Pages**: Home, Recording, Judging, Scoreboard, Officials, Admin, Help

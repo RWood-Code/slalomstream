@@ -7,6 +7,7 @@ import {
   Trash2, Key, Waves, Plug, PlugZap, Download, Globe, AlertCircle,
   ChevronDown, ChevronUp, Eye, EyeOff, Wand2, ShieldCheck, Wifi,
   Archive, RotateCcw, Pencil, ExternalLink, ClipboardPaste, ArrowRight, ListChecks,
+  Monitor, PowerOff, Server,
 } from 'lucide-react';
 import { useQueryClient, useQuery, useMutation } from '@tanstack/react-query';
 import { DIVISIONS, JUDGE_ROLES } from '@/lib/utils';
@@ -121,6 +122,9 @@ export default function Admin() {
         actions={<Button variant="outline" onClick={() => setAdminPinValid(false)}>Lock Admin</Button>}
       />
 
+      {/* Network status — always visible at the top */}
+      <NetworkStatusCard />
+
       {/* Global settings */}
       <div className="space-y-2">
         <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground px-1 pt-2">System Settings</p>
@@ -129,6 +133,7 @@ export default function Admin() {
         <SurePathPanel />
         <OfficialsPinsPanel />
         <UpdatePanel />
+        <SystemOperationsPanel />
         <TournamentArchive />
       </div>
 
@@ -1846,6 +1851,123 @@ function JudgeManagement({ tournamentId }: { tournamentId: number }) {
         <p className="text-xs text-muted-foreground mt-3">
           Manually added judges are specific to this tournament. Officials from the NZTWSA Register with a PIN set appear automatically in all tournaments — shown with the "Officials Register" badge.
         </p>
+      </div>
+    </AdminSection>
+  );
+}
+
+// ─── Network Status Card ────────────────────────────────────────────────────────
+function NetworkStatusCard() {
+  const { toast } = useToast();
+  const { data: network, refetch } = useQuery({
+    queryKey: ['network-info'],
+    queryFn: async () => { const r = await fetch('/api/network-info'); return r.json(); },
+    refetchInterval: 30000,
+    staleTime: 10000,
+  });
+
+  const copy = (text: string) => {
+    navigator.clipboard.writeText(text).then(() => toast({ title: 'Copied to clipboard' }));
+  };
+
+  const urls: string[] = network?.urls ?? [];
+
+  return (
+    <Card className="overflow-hidden border-primary/20 bg-emerald-950 text-white">
+      <div className="px-4 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Monitor className="w-4 h-4 text-emerald-400" />
+          <span className="font-bold text-sm text-white">This Server</span>
+          <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-400/15 px-2 py-0.5 rounded-full border border-emerald-400/20">
+            port {network?.port ?? '…'}
+          </span>
+        </div>
+        <button onClick={() => refetch()} className="p-1.5 text-emerald-400/70 hover:text-emerald-300 transition-colors rounded-lg">
+          <RefreshCw className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      <div className="px-4 pb-3 space-y-2">
+        {urls.length === 0 ? (
+          <p className="text-emerald-300/70 text-xs">Detecting network addresses…</p>
+        ) : (
+          urls.map((url: string) => (
+            <div key={url} className="flex items-center gap-2 bg-emerald-900/60 border border-emerald-700/40 rounded-xl px-3 py-2">
+              <Wifi className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span className="font-mono text-sm text-white font-semibold flex-1 truncate">{url}</span>
+              <button
+                onClick={() => copy(url)}
+                className="p-1 text-emerald-400/70 hover:text-emerald-300 transition-colors rounded"
+                title="Copy URL"
+              >
+                <Copy className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))
+        )}
+        <p className="text-emerald-300/60 text-[11px] leading-snug pt-0.5">
+          Judges and scoreboard screens connect to this URL in their browser. All devices must be on the same WiFi network.
+        </p>
+      </div>
+    </Card>
+  );
+}
+
+// ─── System Operations Panel ───────────────────────────────────────────────────
+function SystemOperationsPanel() {
+  const { toast } = useToast();
+  const [confirming, setConfirming] = useState(false);
+
+  const shutdownMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch('/api/system/shutdown', { method: 'POST' });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: 'Server shutting down', description: 'You can now close the console window.' });
+      setConfirming(false);
+    },
+    onError: () => toast({ title: 'Shutdown failed', variant: 'destructive' }),
+  });
+
+  return (
+    <AdminSection
+      icon={<Server className="w-4 h-4" />}
+      title="System Operations"
+      subtitle="Server lifecycle controls"
+      borderClass="border-red-200 dark:border-red-900"
+    >
+      <div className="px-4 py-4 space-y-3">
+        <div className="flex items-start gap-3 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl">
+          <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Shutdown stops the server</p>
+            <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
+              All connected judges and scoreboards will lose their connection. Use this at the end of the tournament day to cleanly stop the server instead of force-closing the console window.
+            </p>
+          </div>
+        </div>
+
+        {!confirming ? (
+          <Button
+            variant="outline"
+            className="gap-2 border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+            onClick={() => setConfirming(true)}
+          >
+            <PowerOff className="w-4 h-4" /> Shut Down Server
+          </Button>
+        ) : (
+          <div className="flex items-center gap-3">
+            <Button
+              variant="destructive"
+              className="gap-2"
+              onClick={() => shutdownMutation.mutate()}
+              isLoading={shutdownMutation.isPending}
+            >
+              <PowerOff className="w-4 h-4" /> Confirm Shutdown
+            </Button>
+            <Button variant="outline" onClick={() => setConfirming(false)}>Cancel</Button>
+          </div>
+        )}
       </div>
     </AdminSection>
   );

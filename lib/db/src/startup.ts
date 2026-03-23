@@ -10,6 +10,8 @@
  */
 
 import { sql } from "drizzle-orm";
+import fs from "fs";
+import path from "path";
 import { db } from "./index.js";
 import { officialsRegisterTable } from "./schema/officials_register.js";
 
@@ -316,9 +318,45 @@ async function ensureMasterAdmin() {
   ));
 }
 
+// ─── Database backup (offline PGlite mode only) ────────────────────────────────
+// Runs at startup to create a timestamped copy of the data directory.
+// Only active when DB_DATA_DIR is set (Windows offline installs).
+// Keeps the last 5 backups — older ones are automatically deleted.
+async function backupDataDirIfOffline() {
+  const dataDir = process.env.DB_DATA_DIR;
+  if (!dataDir) return; // cloud PostgreSQL — no file backup needed
+
+  try {
+    // Ensure the data directory exists before trying to back it up
+    if (!fs.existsSync(dataDir)) return;
+
+    const backupRoot = path.join(path.dirname(dataDir), "backups");
+    if (!fs.existsSync(backupRoot)) fs.mkdirSync(backupRoot, { recursive: true });
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const dest = path.join(backupRoot, `slalomstream-${timestamp}`);
+
+    fs.cpSync(dataDir, dest, { recursive: true });
+    console.log(`[Startup] Database backed up to: ${dest}`);
+
+    // Prune — keep only the 5 most recent backups
+    const entries = fs.readdirSync(backupRoot)
+      .filter(e => e.startsWith("slalomstream-"))
+      .sort()
+      .reverse();
+    for (const old of entries.slice(5)) {
+      fs.rmSync(path.join(backupRoot, old), { recursive: true, force: true });
+      console.log(`[Startup] Removed old backup: ${old}`);
+    }
+  } catch (err) {
+    console.warn("[Startup] Backup skipped (non-fatal):", (err as Error).message);
+  }
+}
+
 // ─── Public entry point ────────────────────────────────────────────────────────
 export async function runStartupChecks() {
   try {
+    await backupDataDirIfOffline();
     await createTablesIfNotExist();
     await applySchemaPatches();
     await seedOfficialsIfEmpty();

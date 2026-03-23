@@ -9,9 +9,10 @@ import {
   Play, SquareSquare, Timer, User, Wifi, ChevronDown, ChevronUp,
   Camera, CameraOff, Circle, Square, Maximize2, RefreshCw,
   CheckCircle2, Download, ExternalLink, SwitchCamera,
-  X, Monitor, Gauge, MonitorPlay, FolderOpen, FolderPlus
+  X, Monitor, Gauge, MonitorPlay, FolderOpen, FolderPlus,
+  Clock, Flag, AlertTriangle, FileSearch,
 } from 'lucide-react';
-import { ROPE_LENGTHS, SPEEDS, VALID_IWWF_SCORES, formatRope, formatSpeed, getRopeColour, getJudgingPanel } from '@/lib/utils';
+import { ROPE_LENGTHS, SPEEDS, VALID_IWWF_SCORES, formatRope, formatSpeed, getRopeColour, getJudgingPanel, suggestNextRope } from '@/lib/utils';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { QRCodeSVG } from 'qrcode.react';
@@ -940,6 +941,18 @@ export default function Recording() {
   const [rope, setRope] = useState('18.25');
   const [speed, setSpeed] = useState('55');
   const [round, setRound] = useState('1');
+  const [disputePassId, setDisputePassId] = useState<number | null>(null);
+
+  // Rope pre-fill: when skierId changes, look at that skier's last pass and suggest next rope
+  useEffect(() => {
+    if (!skierId || !passes) return;
+    const skierPasses = passes
+      .filter(p => String(p.skier_id) === skierId && p.status !== 'pending' && p.buoys_scored !== null)
+      .sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
+    const last = skierPasses[0] ?? null;
+    const suggested = last ? suggestNextRope(last) : null;
+    if (suggested !== null) setRope(String(suggested));
+  }, [skierId]);
 
   // Persistent settings
   const [liteMode, setLiteMode] = useState(() => localStorage.getItem(LS_LITE_MODE) === 'true');
@@ -1141,7 +1154,8 @@ export default function Recording() {
                 >
                   <SquareSquare className="mr-2 h-5 w-5" /> END PASS / COLLATE
                 </Button>
-                <JudgeScoreStatusBar passId={activePass.id} />
+                <FlagButtons passId={activePass.id} />
+                <JudgeScoreStatusBar passId={activePass.id} judgeCount={judgeCount} />
               </div>
             ) : (
               <div className="space-y-4">
@@ -1203,8 +1217,12 @@ export default function Recording() {
                 {recentPasses.map(pass => {
                   const rc = pass.rope_length ? getRopeColour(pass.rope_length) : null;
                   return (
-                    <Card key={pass.id} className="p-3 hover:border-primary/50 transition-colors flex justify-between items-center">
-                      <div>
+                    <Card
+                      key={pass.id}
+                      className="p-3 hover:border-primary/50 transition-colors flex justify-between items-center cursor-pointer group"
+                      onClick={() => setDisputePassId(pass.id ?? null)}
+                    >
+                      <div className="flex-1 min-w-0">
                         <p className="font-bold text-sm">{pass.skier_name}</p>
                         <p className="text-[11px] text-muted-foreground font-semibold flex items-center gap-1.5 flex-wrap">
                           R{pass.round_number} · {pass.speed_kph}kph
@@ -1218,9 +1236,12 @@ export default function Recording() {
                           )}
                         </p>
                       </div>
-                      <div className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200 px-3 py-1 rounded-lg text-center min-w-[3rem]">
-                        <p className="text-[10px] uppercase font-bold opacity-70">Score</p>
-                        <p className="font-display font-black text-lg leading-none">{pass.buoys_scored ?? '—'}</p>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <FileSearch className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                        <div className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200 px-3 py-1 rounded-lg text-center min-w-[3rem]">
+                          <p className="text-[10px] uppercase font-bold opacity-70">Score</p>
+                          <p className="font-display font-black text-lg leading-none">{pass.buoys_scored ?? '—'}</p>
+                        </div>
                       </div>
                     </Card>
                   );
@@ -1230,6 +1251,11 @@ export default function Recording() {
           </div>
         </div>
       </div>
+
+      {/* Dispute review modal */}
+      {disputePassId !== null && (
+        <DisputeModal passId={disputePassId} onClose={() => setDisputePassId(null)} />
+      )}
 
       {/* Replay slide-up panel — portal-style, appears over everything */}
       <ReplaySlidePanel
@@ -1253,37 +1279,151 @@ export default function Recording() {
   );
 }
 
-// ─── Judge score status bar (during active pass) ───────────────────────────────
-function JudgeScoreStatusBar({ passId }: { passId: number }) {
+// ─── Judge Score Status Bar ─────────────────────────────────────────────────────
+// Shows a slot for each expected judge + their submission status in real time
+function JudgeScoreStatusBar({ passId, judgeCount }: { passId: number; judgeCount: number }) {
   const { data: scores } = usePassJudgeScores(passId);
-
-  if (!scores || scores.length === 0) {
-    return (
-      <p className="text-center text-xs text-muted-foreground animate-pulse">
-        Waiting for judge scores…
-      </p>
-    );
-  }
+  const panel = getJudgingPanel(judgeCount);
 
   const ROLE_SHORT: Record<string, string> = {
     judge_a: 'A', judge_b: 'B', judge_c: 'C', judge_d: 'D', judge_e: 'E', chief_judge: 'CJ',
   };
 
+  const received = scores?.length ?? 0;
+  const allIn = received >= panel.length;
+
   return (
-    <div className="bg-muted/50 rounded-xl p-3">
-      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">
-        Scores received ({scores.length})
-      </p>
-      <div className="flex flex-wrap gap-2">
-        {scores.map((s: any) => (
-          <div key={s.id} className="flex items-center gap-1.5 bg-card border rounded-lg px-2.5 py-1">
-            <span className="text-[10px] font-bold text-muted-foreground">{ROLE_SHORT[s.judge_role] ?? 'J'}</span>
-            <span className="font-display font-bold text-sm text-emerald-700">
-              {s.pass_score === '6_no_gates' ? '6 NG' : s.pass_score}
-            </span>
-            <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+    <div className="bg-muted/40 rounded-xl p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+          Judge Status
+        </p>
+        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${allIn ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700 animate-pulse'}`}>
+          {received}/{panel.length} in
+        </span>
+      </div>
+      <div className={`grid gap-2`} style={{ gridTemplateColumns: `repeat(${panel.length}, 1fr)` }}>
+        {panel.map(station => {
+          const score = scores?.find((s: any) => s.judge_role === station.role);
+          const isIn = !!score;
+          return (
+            <div
+              key={station.role}
+              className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all ${
+                isIn
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800'
+                  : 'bg-muted/60 border-border'
+              }`}
+            >
+              <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+                {ROLE_SHORT[station.role] ?? 'J'}
+              </span>
+              {isIn ? (
+                <>
+                  <span className="font-display font-black text-base text-emerald-700 dark:text-emerald-400 leading-none mt-1">
+                    {score.pass_score === '6_no_gates' ? '6*' : score.pass_score}
+                  </span>
+                  <CheckCircle2 className="w-3 h-3 text-emerald-500 mt-0.5" />
+                </>
+              ) : (
+                <Clock className="w-3.5 h-3.5 text-muted-foreground/50 mt-1 animate-pulse" />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Fall / Gate-miss flag buttons ────────────────────────────────────────────
+function FlagButtons({ passId }: { passId: number }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  const addFlag = async (flag: string) => {
+    try {
+      const res = await fetch(`/api/passes/${passId}/flag`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ flag }),
+      });
+      if (!res.ok) throw new Error('Failed');
+      toast({ title: `${flag} flagged` });
+      queryClient.invalidateQueries({ queryKey: ['/api/passes', passId] });
+    } catch {
+      toast({ title: 'Flag failed', variant: 'destructive' });
+    }
+  };
+
+  return (
+    <div className="flex gap-2">
+      <button
+        onClick={() => addFlag('FALL')}
+        className="flex-1 flex items-center justify-center gap-1.5 bg-red-50 hover:bg-red-100 dark:bg-red-950/30 dark:hover:bg-red-950/60 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-xl py-2 text-xs font-bold transition-colors"
+      >
+        <Flag className="w-3.5 h-3.5" /> FALL
+      </button>
+      <button
+        onClick={() => addFlag('GATE MISS')}
+        className="flex-1 flex items-center justify-center gap-1.5 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/30 dark:hover:bg-amber-950/60 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800 rounded-xl py-2 text-xs font-bold transition-colors"
+      >
+        <AlertTriangle className="w-3.5 h-3.5" /> GATE MISS
+      </button>
+    </div>
+  );
+}
+
+// ─── Dispute Review Modal ─────────────────────────────────────────────────────
+function DisputeModal({ passId, onClose }: { passId: number; onClose: () => void }) {
+  const { data: scores } = usePassJudgeScores(passId);
+  const { data: passData } = useQuery({
+    queryKey: ['/api/passes', passId],
+    queryFn: async () => { const r = await fetch(`/api/passes/${passId}`); return r.json(); },
+  });
+
+  const ROLE_LABELS: Record<string, string> = {
+    judge_a: 'Judge A', judge_b: 'Judge B', judge_c: 'Judge C',
+    judge_d: 'Judge D', judge_e: 'Judge E', chief_judge: 'Chief Judge',
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="bg-card rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-bold text-lg leading-none">{passData?.skier_name ?? '…'}</h3>
+            <p className="text-sm text-muted-foreground mt-1">
+              Rnd {passData?.round_number} · {passData?.speed_kph}kph · {passData?.rope_length}m
+            </p>
           </div>
-        ))}
+          <button onClick={onClose} className="p-2 rounded-xl hover:bg-muted transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="border-t pt-4 space-y-2">
+          <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">Judge Scores</p>
+          {!scores || scores.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-4">No judge scores recorded</p>
+          ) : (
+            (scores as any[]).map(s => (
+              <div key={s.id} className="flex items-center justify-between p-3 bg-muted/50 rounded-xl">
+                <span className="font-semibold text-sm">{ROLE_LABELS[s.judge_role] ?? s.judge_role}</span>
+                <span className="font-display font-black text-xl text-primary">
+                  {s.pass_score === '6_no_gates' ? '6 (no gates)' : s.pass_score}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+
+        {passData?.final_score !== null && passData?.final_score !== undefined && (
+          <div className="flex items-center justify-between p-3 bg-primary/10 rounded-xl border border-primary/20">
+            <span className="font-bold text-sm">Final Score</span>
+            <span className="font-display font-black text-2xl text-primary">{passData.final_score}</span>
+          </div>
+        )}
       </div>
     </div>
   );
