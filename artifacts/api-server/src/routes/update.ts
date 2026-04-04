@@ -7,6 +7,10 @@ import { pipeline } from "stream/promises";
 import multer from "multer";
 import AdmZip from "adm-zip";
 import { isValidAdminSession } from "./settings.js";
+import { getUncachableDropboxClient } from "../services/dropbox-client.js";
+import { db } from "@workspace/db";
+import { appSettingsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 
 const router = Router();
 
@@ -495,6 +499,96 @@ router.post("/apply-zip", (req, res) => {
       updateInProgress = false;
     }
   }, 100);
+});
+
+// ─── Push to Dropbox ─────────────────────────────────────────────────────────
+// Builds the update ZIP in memory and uploads it to Dropbox, then saves the
+// resulting shared-link as the `update_download_url` in app settings.
+router.post("/push-to-dropbox", async (req, res) => {
+  if (!isValidAdminSession(req.headers["x-admin-token"] as string | undefined)) {
+    return res.status(401).json({ error: "Admin authentication required." });
+  }
+
+  const wsRoot          = findWorkspaceRoot();
+  const versionInfo     = readVersionFile();
+  const apiDistPath     = path.join(wsRoot, "artifacts", "api-server",   "dist");
+  const frontendDistPath = path.join(wsRoot, "artifacts", "slalom-stream", "dist");
+  const versionFilePath = path.join(wsRoot, "version.json");
+  const frontendIndexPath = path.join(wsRoot, "artifacts", "slalom-stream", "dist", "public", "index.html");
+  const hasApiDist       = existsSync(path.join(apiDistPath, "index.cjs"));
+  const hasFrontendDist  = existsSync(frontendIndexPath);
+
+  if (!hasApiDist && !hasFrontendDist) {
+    return res.status(503).json({
+      error: "No built dist files found. Build the app before pushing to Dropbox.",
+    });
+  }
+
+  try {
+    // 1. Build the ZIP buffer
+    const zip = new AdmZip();
+    if (existsSync(versionFilePath)) zip.addLocalFile(versionFilePath, "");
+    if (hasApiDist)      zip.addLocalFolder(apiDistPath,      "artifacts/api-server/dist");
+    if (hasFrontendDist) zip.addLocalFolder(frontendDistPath, "artifacts/slalom-stream/dist");
+    const zipBuffer = zip.toBuffer();
+
+    const filename   = `slalomstream-v${versionInfo.version}.zip`;
+    const dropboxPath = `/SlalomStream/${filename}`;
+
+    // 2. Upload to Dropbox
+    const dbx = await getUncachableDropboxClient();
+    const uploadRes = await dbx.filesUpload({
+      path:     dropboxPath,
+      contents: zipBuffer,
+      mode:     { ".tag": "overwrite" },
+    });
+    const uploadedPath = (uploadRes.result as any).path_display as string;
+
+    // 3. Create (or retrieve existing) shared link
+    let sharedUrl: string;
+    try {
+      const linkRes = await dbx.sharingCreateSharedLinkWithSettings({
+        path:     uploadedPath,
+        settings: { requested_visibility: { ".tag": "public" } },
+      });
+      sharedUrl = (linkRes.result as any).url as string;
+    } catch (linkErr: any) {
+      // Dropbox returns a 409 when the link already exists — fetch the existing one
+      const summary: string = linkErr?.error?.error_summary ?? "";
+      if (summary.includes("shared_link_already_exists")) {
+        const listRes = await dbx.sharingListSharedLinks({ path: uploadedPath, direct_only: true });
+        const firstLink = (listRes.result as any).links?.[0];
+        if (!firstLink) throw new Error("Could not retrieve existing Dropbox shared link.");
+        sharedUrl = firstLink.url as string;
+      } else {
+        throw linkErr;
+      }
+    }
+
+    // 4. Convert viewer URL → direct-download URL (?dl=0 → ?dl=1)
+    const downloadUrl = sharedUrl.includes("?dl=")
+      ? sharedUrl.replace("?dl=0", "?dl=1")
+      : sharedUrl + (sharedUrl.includes("?") ? "&dl=1" : "?dl=1");
+
+    // 5. Persist in app settings so venues can Fetch Update with one click
+    const [existing] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.id, 1));
+    if (existing) {
+      await db.update(appSettingsTable).set({ update_download_url: downloadUrl }).where(eq(appSettingsTable.id, 1));
+    } else {
+      await db.insert(appSettingsTable).values({ id: 1, update_download_url: downloadUrl });
+    }
+
+    return res.json({
+      ok:          true,
+      version:     versionInfo.version,
+      downloadUrl,
+      fileSize:    zipBuffer.length,
+      dropboxPath: uploadedPath,
+    });
+  } catch (err: any) {
+    console.error("[push-to-dropbox]", err);
+    return res.status(500).json({ error: err.message ?? "Dropbox upload failed." });
+  }
 });
 
 export default router;

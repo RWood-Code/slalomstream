@@ -7,7 +7,7 @@ import {
   Trash2, Key, Waves, Plug, PlugZap, Download, Globe, AlertCircle,
   ChevronDown, ChevronUp, Eye, EyeOff, Wand2, ShieldCheck, Wifi,
   Archive, RotateCcw, Pencil, ExternalLink, ClipboardPaste, ArrowRight, ListChecks,
-  Monitor, PowerOff, Server,
+  Monitor, PowerOff, Server, CloudUpload,
 } from 'lucide-react';
 import { useQueryClient, useQuery, useMutation } from '@tanstack/react-query';
 import { DIVISIONS, JUDGE_ROLES } from '@/lib/utils';
@@ -1506,6 +1506,13 @@ function UpdatePanel() {
   const [isDownloading, setIsDownloading] = useState(false);
   const zipInputRef = useRef<HTMLInputElement>(null);
 
+  // Dropbox push state
+  type DropboxPushStatus = 'idle' | 'pushing' | 'done';
+  interface DropboxPushResult { version: string; downloadUrl: string; fileSize: number }
+  const [dropboxStatus, setDropboxStatus] = useState<DropboxPushStatus>('idle');
+  const [dropboxResult, setDropboxResult] = useState<DropboxPushResult | null>(null);
+  const [dropboxError, setDropboxError]   = useState<string | null>(null);
+
   useEffect(() => {
     fetch('/api/update/version')
       .then(r => r.json() as Promise<{ version: string }>)
@@ -1628,6 +1635,32 @@ function UpdatePanel() {
     toast({ title: 'Download URL set', description: 'Pointing to this app\'s built-in download endpoint.' });
   };
 
+  const pushToDropbox = async () => {
+    setDropboxStatus('pushing');
+    setDropboxError(null);
+    setDropboxResult(null);
+    try {
+      const res = await fetch('/api/update/push-to-dropbox', {
+        method: 'POST',
+        headers: adminToken ? { 'X-Admin-Token': adminToken } : {},
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setDropboxError(data.error ?? 'Dropbox upload failed');
+        setDropboxStatus('idle');
+        return;
+      }
+      setDropboxResult(data as DropboxPushResult);
+      setDropboxStatus('done');
+      setDownloadUrlInput(data.downloadUrl);
+      refetchSettings();
+      toast({ title: 'Pushed to Dropbox', description: `v${data.version} uploaded — download URL updated.` });
+    } catch (err: any) {
+      setDropboxError(err.message ?? 'Dropbox upload failed');
+      setDropboxStatus('idle');
+    }
+  };
+
   return (
     <AdminSection
       icon={<RefreshCw className="w-4 h-4" />}
@@ -1661,7 +1694,7 @@ function UpdatePanel() {
               Save
             </Button>
           </div>
-          {/* Download + self-host helpers */}
+          {/* Download + self-host + Dropbox helpers */}
           <div className="flex flex-wrap gap-2 mt-1">
             <Button
               variant="outline"
@@ -1681,9 +1714,46 @@ function UpdatePanel() {
               <CheckCircle2 className="w-3.5 h-3.5" />
               {downloadUrl === thisAppDownloadUrl ? 'Using this app ✓' : 'Use this app as update source'}
             </Button>
+            <Button
+              variant="outline"
+              className={`h-8 text-xs gap-1.5 ${dropboxStatus === 'done' ? 'text-blue-700 dark:text-blue-400 border-blue-300 dark:border-blue-700' : 'text-[#0061FF] border-[#0061FF]/30 hover:bg-blue-50 dark:hover:bg-blue-950/30'}`}
+              onClick={pushToDropbox}
+              isLoading={dropboxStatus === 'pushing'}
+              disabled={dropboxStatus === 'pushing'}
+            >
+              <CloudUpload className="w-3.5 h-3.5" />
+              {dropboxStatus === 'pushing' ? 'Uploading to Dropbox…' : dropboxStatus === 'done' ? 'Pushed to Dropbox ✓' : 'Push to Dropbox'}
+            </Button>
           </div>
+
+          {/* Dropbox push result */}
+          {dropboxStatus === 'done' && dropboxResult && (
+            <div className="p-3 rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+                <span className="text-sm font-semibold text-blue-800 dark:text-blue-200">
+                  v{dropboxResult.version} uploaded to Dropbox
+                </span>
+                <span className="ml-auto text-xs text-blue-600 dark:text-blue-400">
+                  {(dropboxResult.fileSize / 1024 / 1024).toFixed(1)} MB
+                </span>
+              </div>
+              <p className="text-xs text-blue-700 dark:text-blue-300">
+                Download URL updated — venues can now fetch this update automatically with one click.
+              </p>
+            </div>
+          )}
+
+          {/* Dropbox push error */}
+          {dropboxError && (
+            <div className="flex items-start gap-2 p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-300 text-xs">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span><strong>Dropbox push failed:</strong> {dropboxError}</span>
+            </div>
+          )}
+
           <p className="text-xs text-muted-foreground">
-            <strong>Download update ZIP</strong> saves the current build to your device for distribution. <strong>Use this app as update source</strong> sets the download URL to this published app's endpoint — venues can then fetch updates automatically with one click after each republish.
+            <strong>Download update ZIP</strong> saves the current build to your device for distribution. <strong>Push to Dropbox</strong> uploads it directly to your connected Dropbox — the download URL is set automatically so venues can fetch the update in one click.
           </p>
         </div>
 
