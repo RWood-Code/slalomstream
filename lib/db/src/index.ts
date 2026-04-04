@@ -23,6 +23,11 @@ function createDb() {
     return drizzlePglite({ client, schema });
   } else if (process.env.DATABASE_URL) {
     pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    // Without this handler an idle-client error (e.g. server-side connection
+    // reset) would emit an unhandled 'error' event and crash the process.
+    pool.on("error", (err) => {
+      console.error("[DB Pool] Idle client error (non-fatal):", err.message);
+    });
     return drizzlePg(pool, { schema });
   } else {
     throw new Error(
