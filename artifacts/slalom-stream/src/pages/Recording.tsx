@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useAppStore } from '@/lib/store';
 import {
   useGetTournament, useListSkiers, useListPasses,
-  useCreatePass, useUpdatePass
+  useCreatePass, useUpdatePass, useCreateSkier,
 } from '@workspace/api-client-react';
 import { Card, Button, Badge, PageHeader, Select, Input } from '@/components/ui/shared';
 import {
@@ -10,9 +10,9 @@ import {
   Camera, CameraOff, Circle, Square, Maximize2, RefreshCw,
   CheckCircle2, Download, ExternalLink, SwitchCamera,
   X, Monitor, Gauge, MonitorPlay, FolderOpen, FolderPlus,
-  Clock, Flag, AlertTriangle, FileSearch,
+  Clock, Flag, AlertTriangle, FileSearch, UserPlus,
 } from 'lucide-react';
-import { ROPE_LENGTHS, SPEEDS, VALID_IWWF_SCORES, formatRope, formatSpeed, getRopeColour, getJudgingPanel, suggestNextRope } from '@/lib/utils';
+import { ROPE_LENGTHS, SPEEDS, VALID_IWWF_SCORES, DIVISIONS, formatRope, formatSpeed, getRopeColour, getJudgingPanel, suggestNextRope } from '@/lib/utils';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { QRCodeSVG } from 'qrcode.react';
@@ -942,6 +942,9 @@ export default function Recording() {
   const [speed, setSpeed] = useState('55');
   const [round, setRound] = useState('1');
   const [disputePassId, setDisputePassId] = useState<number | null>(null);
+  const [showAddSkier, setShowAddSkier] = useState(false);
+  const [addSkierForm, setAddSkierForm] = useState({ first_name: '', surname: '', division: DIVISIONS[0] });
+  const [addSkierError, setAddSkierError] = useState<string | null>(null);
 
   // Rope pre-fill: when skierId changes, look at that skier's last pass and suggest next rope
   useEffect(() => {
@@ -1001,6 +1004,31 @@ export default function Recording() {
       }
     }
   });
+
+  const addSkierMutation = useCreateSkier({
+    mutation: {
+      onSuccess: (data) => {
+        queryClient.invalidateQueries({ queryKey: ['/api/tournaments', activeTournamentId, 'skiers'] });
+        setSkierId(String(data.id));
+        setShowAddSkier(false);
+        setAddSkierForm({ first_name: '', surname: '', division: DIVISIONS[0] });
+        setAddSkierError(null);
+        toast({ title: `${data.first_name} ${data.surname} added` });
+      },
+      onError: (err: any) => {
+        setAddSkierError(err?.response?.data?.error ?? err?.message ?? 'Failed to add skier');
+      },
+    }
+  });
+
+  const handleAddSkier = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addSkierForm.first_name.trim() || !addSkierForm.surname.trim()) return;
+    addSkierMutation.mutate({
+      id: activeTournamentId!,
+      data: { first_name: addSkierForm.first_name.trim(), surname: addSkierForm.surname.trim(), division: addSkierForm.division, is_financial: false },
+    });
+  };
 
   if (!activeTournamentId) {
     return <div className="p-8 text-center"><p className="text-xl text-muted-foreground">Select a tournament from Home first.</p></div>;
@@ -1159,18 +1187,59 @@ export default function Recording() {
               </div>
             ) : (
               <div className="space-y-4">
-                <Select
-                  label="Skier"
-                  value={skierId}
-                  onChange={e => setSkierId(e.target.value)}
-                  options={[
-                    { label: '-- Select Skier --', value: '' },
-                    ...(skiers?.map(s => ({
-                      label: `${s.first_name} ${s.surname} · ${s.division || '—'}`,
-                      value: s.id,
-                    })) || [])
-                  ]}
-                />
+                <div>
+                  <Select
+                    label="Skier"
+                    value={skierId}
+                    onChange={e => { setSkierId(e.target.value); setShowAddSkier(false); }}
+                    options={[
+                      { label: '-- Select Skier --', value: '' },
+                      ...(skiers?.map(s => ({
+                        label: `${s.first_name} ${s.surname} · ${s.division || '—'}`,
+                        value: s.id,
+                      })) || [])
+                    ]}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => { setShowAddSkier(v => !v); setAddSkierError(null); }}
+                    className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <UserPlus className="w-3.5 h-3.5" />
+                    {showAddSkier ? 'Cancel' : 'Add new skier'}
+                  </button>
+                  {showAddSkier && (
+                    <form onSubmit={handleAddSkier} className="mt-3 p-3 rounded-xl border bg-muted/40 space-y-2.5">
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input
+                          label="First name"
+                          value={addSkierForm.first_name}
+                          onChange={e => setAddSkierForm(f => ({ ...f, first_name: e.target.value }))}
+                          required
+                          autoFocus
+                        />
+                        <Input
+                          label="Surname"
+                          value={addSkierForm.surname}
+                          onChange={e => setAddSkierForm(f => ({ ...f, surname: e.target.value }))}
+                          required
+                        />
+                      </div>
+                      <Select
+                        label="Division"
+                        value={addSkierForm.division}
+                        onChange={e => setAddSkierForm(f => ({ ...f, division: e.target.value }))}
+                        options={DIVISIONS.map(d => ({ label: d, value: d }))}
+                      />
+                      {addSkierError && (
+                        <p className="text-xs text-red-500 bg-red-500/10 border border-red-500/20 rounded-lg px-2.5 py-1.5">{addSkierError}</p>
+                      )}
+                      <Button type="submit" variant="primary" size="sm" className="w-full" isLoading={addSkierMutation.isPending}>
+                        <UserPlus className="w-3.5 h-3.5 mr-1.5" /> Add &amp; Select
+                      </Button>
+                    </form>
+                  )}
+                </div>
                 <div className="grid grid-cols-2 gap-3">
                   <Select
                     label="Rope"
