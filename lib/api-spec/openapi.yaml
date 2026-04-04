@@ -597,6 +597,9 @@ components:
         notes:
           type: string
           nullable: true
+        is_test:
+          type: boolean
+          description: When true, hidden from live/scoreboard views
       required: [name, tournament_class, judge_count, num_rounds]
 
     UpdateTournamentRequest:
@@ -628,6 +631,9 @@ components:
         notes:
           type: string
           nullable: true
+        is_test:
+          type: boolean
+          description: When true, hidden from live/scoreboard views
 
     Skier:
       type: object

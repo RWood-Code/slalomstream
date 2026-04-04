@@ -16,7 +16,15 @@ if not defined PORT set PORT=3000
 
 rem Database stored locally — no internet required
 rem PGlite (PostgreSQL compiled to WebAssembly) runs inside Node.js
-set DB_DATA_DIR=%~dp0data
+rem
+rem Data directory: prefer the old in-install location if it already exists
+rem (backwards compat), otherwise use LOCALAPPDATA which is always user-writable
+rem even when SlalomStream is installed in Program Files.
+if exist "%~dp0data" (
+  set DB_DATA_DIR=%~dp0data
+) else (
+  set DB_DATA_DIR=%LOCALAPPDATA%\SlalomStream\data
+)
 set SERVE_STATIC=true
 set STATIC_DIR=%~dp0artifacts\slalom-stream\dist\public
 set NODE_ENV=production

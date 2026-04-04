@@ -49,6 +49,10 @@ export const CreateTournamentBody = zod.object({
   num_rounds: zod.number(),
   admin_pin: zod.string().nullish(),
   notes: zod.string().nullish(),
+  is_test: zod
+    .boolean()
+    .optional()
+    .describe("When true, hidden from live\/scoreboard views"),
 });
 
 /**
@@ -94,6 +98,10 @@ export const UpdateTournamentBody = zod.object({
   num_rounds: zod.number().optional(),
   admin_pin: zod.string().nullish(),
   notes: zod.string().nullish(),
+  is_test: zod
+    .boolean()
+    .optional()
+    .describe("When true, hidden from live\/scoreboard views"),
 });
 
 export const UpdateTournamentResponse = zod.object({

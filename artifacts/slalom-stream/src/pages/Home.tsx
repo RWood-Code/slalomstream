@@ -36,13 +36,19 @@ export default function Home() {
     },
   });
 
+  const [createError, setCreateError] = useState<string | null>(null);
+
   const createMutation = useCreateTournament({
     mutation: {
       onSuccess: (data) => {
         queryClient.invalidateQueries({ queryKey: ['/api/tournaments'] });
         setActiveTournamentId(data.id);
         setCreateOpen(false);
-      }
+        setCreateError(null);
+      },
+      onError: (err: any) => {
+        setCreateError(err?.response?.data?.error ?? err?.message ?? 'Failed to create tournament. Please try again.');
+      },
     }
   });
 
@@ -294,6 +300,9 @@ export default function Home() {
               <p className="text-xs text-muted-foreground">Hidden from live views; only visible when "Show test data" is toggled on.</p>
             </div>
           </label>
+          {createError && (
+            <p className="text-sm text-red-500 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{createError}</p>
+          )}
           <div className="pt-4 flex justify-end gap-3">
             <Button type="button" variant="ghost" onClick={() => setCreateOpen(false)}>Cancel</Button>
             <Button type="submit" variant="primary" isLoading={createMutation.isPending}>Create Tournament</Button>

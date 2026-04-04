@@ -1194,7 +1194,7 @@ function UpdatePanel() {
       setTimeout(async () => {
         for (let i = 0; i < 25; i++) {
           await new Promise(r => setTimeout(r, 2000));
-          try { const ping = await fetch('/api/health'); if (ping.ok) { window.location.reload(); return; } } catch {}
+          try { const ping = await fetch('/api/healthz'); if (ping.ok) { window.location.reload(); return; } } catch {}
         }
       }, 4000);
     } catch (err: any) {

@@ -46,6 +46,8 @@ export interface CreateTournamentRequest {
   num_rounds: number;
   admin_pin?: string | null;
   notes?: string | null;
+  /** When true, hidden from live/scoreboard views */
+  is_test?: boolean;
 }
 
 export type UpdateTournamentRequestStatus =
@@ -68,6 +70,8 @@ export interface UpdateTournamentRequest {
   num_rounds?: number;
   admin_pin?: string | null;
   notes?: string | null;
+  /** When true, hidden from live/scoreboard views */
+  is_test?: boolean;
 }
 
 export interface Skier {
@@ -219,8 +223,6 @@ export interface AdminPinRequest {
 
 export interface AdminPinResponse {
   valid: boolean;
-  token?: string;
-  admin_name?: string;
 }
 
 export interface AppSettings {

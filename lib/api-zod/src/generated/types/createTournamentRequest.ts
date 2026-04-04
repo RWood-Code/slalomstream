@@ -16,4 +16,6 @@ export interface CreateTournamentRequest {
   num_rounds: number;
   admin_pin?: string | null;
   notes?: string | null;
+  /** When true, hidden from live/scoreboard views */
+  is_test?: boolean;
 }
