@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "NODE_ENV=development tsx ./src/index.ts",
     "build": "tsx ./build.ts",
+    "start": "node artifacts/api-server/dist/index.cjs",
     "serve": "SERVE_STATIC=true STATIC_DIR=./public node ./dist/index.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
