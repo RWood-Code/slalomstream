@@ -113,6 +113,7 @@ judgeRouter.post("/verify-pin", async (req, res) => {
       tournament_id,
       name: `${official.first_name} ${official.surname}`,
       judge_role: official.judge_role || gradeToRole(official.slalom_grade),
+      is_admin: !!official.is_admin,
       pin: "***",
       is_official: true,
       official_id: official.id,

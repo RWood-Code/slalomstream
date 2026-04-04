@@ -1566,37 +1566,29 @@ function DisputeModal({ passId, onClose }: { passId: number; onClose: () => void
     setOverrideError(null);
 
     try {
-      // Step 1 — verify PIN has admin or chief_judge authority
-      let authorised = false;
-
-      // Check is_admin authority via the admin endpoint.
-      // Returns valid:true when the PIN matches the global admin PIN or an is_admin official.
-      // (When no admin_pin is configured, the system is in "open access" mode and any PIN is valid.)
-      const adminRes = await fetch('/api/admin/verify-pin', {
+      // Step 1 — identity-based PIN validation via judges/verify-pin.
+      // This endpoint requires an exact PIN match in the database and never grants
+      // blanket access regardless of admin_pin configuration — so it is safe to use
+      // for role checking. Only chief_judge role or is_admin=true officials are authorised.
+      if (!passData?.tournament_id) {
+        setOverrideError('Cannot verify PIN — tournament context missing.');
+        setOverrideLoading(false);
+        return;
+      }
+      const verifyRes = await fetch('/api/judges/verify-pin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: overridePin.trim() }),
+        body: JSON.stringify({ tournament_id: passData.tournament_id, pin: overridePin.trim() }),
       });
-      if (adminRes.ok) {
-        const adminData = await adminRes.json();
-        if (adminData.valid) authorised = true;
-      }
-
-      // If not admin, check if they're the chief_judge in this tournament
-      if (!authorised && passData?.tournament_id) {
-        const cjRes = await fetch('/api/judges/verify-pin', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tournament_id: passData.tournament_id, pin: overridePin.trim() }),
-        });
-        if (cjRes.ok) {
-          const cjData = await cjRes.json();
-          if (cjData.judge_role === 'chief_judge') authorised = true;
-        }
-      }
-
-      if (!authorised) {
+      if (!verifyRes.ok) {
         setOverrideError('Invalid PIN — only the Chief Judge or an admin may override scores.');
+        setOverrideLoading(false);
+        return;
+      }
+      const verifyData = await verifyRes.json();
+      const authorised = verifyData.is_admin === true || verifyData.judge_role === 'chief_judge';
+      if (!authorised) {
+        setOverrideError('PIN recognised but you are not authorised — only the Chief Judge or an admin may override scores.');
         setOverrideLoading(false);
         return;
       }
