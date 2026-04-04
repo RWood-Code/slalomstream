@@ -93,12 +93,14 @@ export default function Scoreboard() {
   };
 
   const exportCsv = () => {
-    const roundCols = allRoundNumbers.map(r => `R${r}`).join(',');
-    const rows: string[] = [`Division,Rank,Skier,${roundCols},Avg Score,Best Rope,Passes`];
+    const roundCols = allRoundNumbers.length > 0 ? ',' + allRoundNumbers.map(r => `R${r}`).join(',') : '';
+    const rows: string[] = [`Division,Rank,Skier${roundCols},Avg Score,Best Rope,Passes`];
     leaderboard.forEach(({ division, skiers }) => {
       skiers.forEach((s, i) => {
-        const roundVals = allRoundNumbers.map(r => s.rounds[r]?.score?.toFixed(2) ?? '').join(',');
-        rows.push([division, i + 1, `"${s.name}"`, roundVals, s.avg.toFixed(2), `${s.bestRope}m`, s.passesCount].join(','));
+        const roundVals = allRoundNumbers.length > 0
+          ? ',' + allRoundNumbers.map(r => s.rounds[r]?.score?.toFixed(2) ?? '').join(',')
+          : '';
+        rows.push([division, i + 1, `"${s.name}"`].join(',') + roundVals + ',' + [s.avg.toFixed(2), `${s.bestRope}m`, s.passesCount].join(','));
       });
     });
     const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
@@ -319,9 +321,6 @@ export default function Scoreboard() {
           /* Hide screen chrome — layout wrappers, nav, header */
           nav, header, aside,
           [data-print-hidden] { display: none !important; }
-
-          /* Screen-only scoreboard */
-          .print-hidden { display: none !important; }
 
           /* Print-only results sheet */
           #print-results { display: block !important; width: 100%; }
