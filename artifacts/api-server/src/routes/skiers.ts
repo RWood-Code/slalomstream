@@ -21,21 +21,27 @@ router.post("/", async (req, res) => {
 // POST /bulk — import multiple skiers at once from a CSV start list.
 // Body: { skiers: Array<{ first_name, surname, division?, club?, pin? }> }
 // Skips rows where first_name+surname already exist in this tournament (case-insensitive).
+// Imports skier without PIN if the PIN is already assigned to another skier (and counts it in duplicate_pins).
 router.post("/bulk", async (req, res) => {
   const tournamentId = parseInt((req.params as any).id);
   const rows: any[] = Array.isArray(req.body.skiers) ? req.body.skiers : [];
 
   const existing = await db
-    .select({ first_name: skiersTable.first_name, surname: skiersTable.surname })
+    .select({ first_name: skiersTable.first_name, surname: skiersTable.surname, pin: skiersTable.pin })
     .from(skiersTable)
     .where(eq(skiersTable.tournament_id, tournamentId));
 
   const existingKeys = new Set(
     existing.map(s => `${s.first_name.toLowerCase()}||${s.surname.toLowerCase()}`)
   );
+  // Track all PINs already in use (existing + newly inserted in this batch)
+  const existingPins = new Set<string>(
+    existing.map(s => s.pin).filter((p): p is string => !!p)
+  );
 
   let imported = 0;
   let skipped = 0;
+  let duplicate_pins = 0;
   const errors: { row: number; reason: string }[] = [];
 
   for (let i = 0; i < rows.length; i++) {
@@ -51,6 +57,12 @@ router.post("/bulk", async (req, res) => {
       skipped++;
       continue;
     }
+    // Check PIN conflict — import skier without PIN if the PIN is already taken
+    let pin: string | null = row.pin ? String(row.pin).trim() : null;
+    if (pin && existingPins.has(pin)) {
+      duplicate_pins++;
+      pin = null;
+    }
     try {
       const body = insertSkierSchema.parse({
         tournament_id: tournamentId,
@@ -58,17 +70,18 @@ router.post("/bulk", async (req, res) => {
         surname,
         division: row.division || null,
         club: row.club || null,
-        pin: row.pin || null,
+        pin,
       });
       await db.insert(skiersTable).values(body);
       existingKeys.add(key);
+      if (pin) existingPins.add(pin); // prevent two new rows getting the same PIN
       imported++;
     } catch (err: any) {
       errors.push({ row: i + 1, reason: err.message ?? 'Insert failed' });
     }
   }
 
-  res.json({ imported, skipped, errors });
+  res.json({ imported, skipped, duplicate_pins, errors });
 });
 
 export const skierRouter = Router();

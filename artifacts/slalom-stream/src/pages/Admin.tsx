@@ -1130,7 +1130,7 @@ function splitFullName(name: string): { first_name: string; surname: string } {
 function buildCsvRows(rawRows: string[][], headers: string[], mapping: Record<CsvField, string>): ParsedCsvRow[] {
   const idx = (f: CsvField) => mapping[f] ? headers.indexOf(mapping[f]) : -1;
   const nIdx = idx('name'), dIdx = idx('division'), cIdx = idx('club'), pIdx = idx('pin');
-  return rawRows.map(cells => {
+  const built = rawRows.map(cells => {
     const rawName = nIdx >= 0 ? (cells[nIdx] ?? '').trim() : '';
     const { first_name, surname } = splitFullName(rawName);
     const division = dIdx >= 0 ? (cells[dIdx] ?? '').trim() : '';
@@ -1143,6 +1143,25 @@ function buildCsvRows(rawRows: string[][], headers: string[], mapping: Record<Cs
     if (pin && !/^\d{4,8}$/.test(pin)) { messages.push('PIN should be 4–8 digits'); if (status === 'valid') status = 'warning'; }
     return { first_name, surname, division, club, pin, status, messages, selected: status !== 'error' };
   });
+  // Post-pass: flag duplicate PINs within the CSV batch
+  const pinCounts = new Map<string, number[]>();
+  built.forEach((row, i) => {
+    if (row.pin && /^\d{4,8}$/.test(row.pin)) {
+      const arr = pinCounts.get(row.pin) ?? [];
+      arr.push(i);
+      pinCounts.set(row.pin, arr);
+    }
+  });
+  for (const [, indices] of pinCounts) {
+    if (indices.length > 1) {
+      for (const i of indices) {
+        const row = built[i];
+        row.messages.push(`PIN ${row.pin} appears ${indices.length}× in this CSV — duplicates will be cleared`);
+        if (row.status === 'valid') row.status = 'warning';
+      }
+    }
+  }
+  return built;
 }
 
 function CsvImportPanel({ tournamentId }: { tournamentId: number }) {
@@ -1156,7 +1175,7 @@ function CsvImportPanel({ tournamentId }: { tournamentId: number }) {
   const [rows, setRows] = useState<ParsedCsvRow[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<{ imported: number; skipped: number } | null>(null);
+  const [importResult, setImportResult] = useState<{ imported: number; skipped: number; duplicate_pins: number; server_errors: number } | null>(null);
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1197,9 +1216,19 @@ function CsvImportPanel({ tournamentId }: { tournamentId: number }) {
         body: JSON.stringify({ skiers: toImport }),
       });
       const data = await res.json();
-      setImportResult({ imported: data.imported, skipped: data.skipped });
+      const result = {
+        imported: data.imported ?? 0,
+        skipped: data.skipped ?? 0,
+        duplicate_pins: data.duplicate_pins ?? 0,
+        server_errors: (data.errors ?? []).length,
+      };
+      setImportResult(result);
       queryClient.invalidateQueries({ queryKey: ['/api/tournaments', tournamentId, 'skiers'] });
-      toast({ title: `${data.imported} imported, ${data.skipped} skipped (duplicates)` });
+      const parts = [`${result.imported} imported`];
+      if (result.skipped) parts.push(`${result.skipped} skipped (name duplicate)`);
+      if (result.duplicate_pins) parts.push(`${result.duplicate_pins} PIN conflict${result.duplicate_pins !== 1 ? 's' : ''} cleared`);
+      if (result.server_errors) parts.push(`${result.server_errors} error${result.server_errors !== 1 ? 's' : ''}`);
+      toast({ title: parts.join(', ') });
     } catch {
       toast({ title: 'Import failed', variant: 'destructive' });
     } finally {
@@ -1303,10 +1332,13 @@ function CsvImportPanel({ tournamentId }: { tournamentId: number }) {
                 {selected.size} of {rows.length} rows selected
               </p>
               <button
-                onClick={() => setSelected(prev => prev.size === rows.length ? new Set() : new Set(rows.map((_, i) => i)))}
+                onClick={() => {
+                  const selectable = rows.map((_, i) => i).filter(i => rows[i].status !== 'error');
+                  setSelected(prev => prev.size === selectable.length ? new Set() : new Set(selectable));
+                }}
                 className="text-xs text-primary hover:underline font-medium"
               >
-                {selected.size === rows.length ? 'Deselect all' : 'Select all'}
+                {selected.size === rows.filter(r => r.status !== 'error').length ? 'Deselect all' : 'Select all'}
               </button>
             </div>
 
@@ -1351,9 +1383,20 @@ function CsvImportPanel({ tournamentId }: { tournamentId: number }) {
             </div>
 
             {importResult && (
-              <div className="flex items-center gap-2 p-3 bg-emerald-50 dark:bg-emerald-950/30 rounded-xl border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-medium text-sm">
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                {importResult.imported} imported, {importResult.skipped} skipped (already in tournament)
+              <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 rounded-xl border border-emerald-200 dark:border-emerald-800 text-sm space-y-1">
+                <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-medium">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  {importResult.imported} skier{importResult.imported !== 1 ? 's' : ''} imported successfully
+                </div>
+                {importResult.skipped > 0 && (
+                  <p className="text-muted-foreground text-xs pl-6">{importResult.skipped} skipped — already in tournament (same name)</p>
+                )}
+                {importResult.duplicate_pins > 0 && (
+                  <p className="text-amber-600 dark:text-amber-400 text-xs pl-6">{importResult.duplicate_pins} PIN conflict{importResult.duplicate_pins !== 1 ? 's' : ''} — skier imported without PIN (PIN already assigned to another skier)</p>
+                )}
+                {importResult.server_errors > 0 && (
+                  <p className="text-destructive text-xs pl-6">{importResult.server_errors} row{importResult.server_errors !== 1 ? 's' : ''} failed to import — check format</p>
+                )}
               </div>
             )}
 
