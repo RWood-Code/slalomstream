@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { passesTable, judgeScoresTable, tournamentsTable, insertPassSchema } from "@workspace/db";
-import { eq, desc, and, inArray, ilike, ne, isNotNull, max } from "drizzle-orm";
+import { eq, desc, and, inArray, ilike, ne, isNotNull, isNull, or, max } from "drizzle-orm";
 
 const ALL_SCORING_ROLES = ['judge_a', 'judge_b', 'judge_c', 'judge_d', 'judge_e'];
 function getScoringRoles(judgeCount: number): string[] {
@@ -28,18 +28,25 @@ export const passRouter = Router();
 // GET /api/passes/personal-best?name=X&division=Y&exclude_pass_id=Z
 // Returns the all-time highest buoys_scored for a given skier (by name+division),
 // excluding one pass ID (the current one being checked, to avoid counting it as its own PB).
+// Division "Open" is treated as equivalent to NULL — both map to the same logical division.
 passRouter.get("/personal-best", async (req, res) => {
   const name = String(req.query.name ?? '').trim();
   const division = String(req.query.division ?? '').trim();
   const excludeId = req.query.exclude_pass_id ? parseInt(String(req.query.exclude_pass_id)) : null;
 
   if (!name) return res.status(400).json({ error: "name required" });
+  if (!division) return res.status(400).json({ error: "division required" });
+
+  // "Open" and NULL are the same logical division — match both in the query
+  const divisionCondition = division === 'Open'
+    ? or(isNull(passesTable.division), eq(passesTable.division, 'Open'))
+    : eq(passesTable.division, division);
 
   const conditions = [
     eq(passesTable.skier_name, name),
+    divisionCondition!,
     ne(passesTable.status, 'pending'),
     isNotNull(passesTable.buoys_scored),
-    ...(division ? [eq(passesTable.division, division)] : []),
     ...(excludeId ? [ne(passesTable.id, excludeId)] : []),
   ];
 
@@ -83,10 +90,14 @@ passRouter.get("/personal-bests", async (req, res) => {
     ))
     .groupBy(passesTable.skier_name, passesTable.division);
 
+  // Normalize NULL and 'Open' into the same key so legacy null-division rows
+  // are correctly merged with explicitly-set 'Open' rows.
   const map: Record<string, number> = {};
   for (const row of rows) {
-    if (row.best !== null && row.best !== undefined) {
-      const key = `${row.skier_name}||${row.division ?? 'Open'}`;
+    if (row.best === null || row.best === undefined) continue;
+    const key = `${row.skier_name}||${row.division ?? 'Open'}`;
+    const existing = map[key];
+    if (existing === undefined || row.best > existing) {
       map[key] = row.best;
     }
   }
