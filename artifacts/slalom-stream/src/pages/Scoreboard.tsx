@@ -310,44 +310,24 @@ export default function Scoreboard() {
           margin: 15mm 12mm;
         }
         @media print {
-          /* Reset everything */
-          * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-
-          /* Hide screen-only elements */
-          body > *:not(#app) { display: none !important; }
-          nav, header, aside, footer,
-          [data-print-hidden],
-          .print\\:hidden { display: none !important; }
-
-          /* Show print-only elements */
-          .print\\:block { display: block !important; }
-
-          /* Remove shadows and backgrounds from card wrapper */
-          #app, .min-h-screen, main, [class*="max-w-"] {
-            padding: 0 !important;
-            margin: 0 !important;
-            background: white !important;
-            box-shadow: none !important;
+          /* Force background-color printing for all elements */
+          * {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
 
-          /* Ensure print results sheet fills page */
-          #print-results {
-            display: block !important;
-            width: 100%;
-            color: black;
-            background: white;
-          }
+          /* Hide screen chrome — layout wrappers, nav, header */
+          nav, header, aside,
+          [data-print-hidden] { display: none !important; }
+
+          /* Screen-only scoreboard */
+          .print-hidden { display: none !important; }
+
+          /* Print-only results sheet */
+          #print-results { display: block !important; width: 100%; }
 
           /* Page-break helpers */
           .break-inside-avoid { break-inside: avoid; }
-
-          /* Table borders visible in print */
-          table, th, td { border-color: #9ca3af !important; }
-
-          /* Heading backgrounds need forced color */
-          .bg-gray-900 { background-color: #111827 !important; color: white !important; }
-          .bg-gray-100 { background-color: #f3f4f6 !important; }
-          .bg-gray-50  { background-color: #f9fafb !important; }
         }
       `}</style>
     </>
