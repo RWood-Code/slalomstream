@@ -71,10 +71,23 @@ function AdminSection({
 
 // ─── Admin entry / lock ────────────────────────────────────────────────────────
 export default function Admin() {
-  const { adminPinValid, setAdminPinValid, setAdminToken, activeTournamentId } = useAppStore();
+  const { adminPinValid, setAdminPinValid, setAdminToken, activeTournamentId, adminToken, logout } = useAppStore();
   const [pinInput, setPinInput] = useState('');
   const { toast } = useToast();
   const verifyMutation = useVerifyAdminPin();
+
+  // Validate stored token against the server on mount.
+  // If the server restarted (after an update, deployment restart, etc.) the
+  // in-memory session will be gone. Resetting adminPinValid brings the PIN
+  // form back so the user can re-authenticate cleanly.
+  useEffect(() => {
+    if (!adminPinValid) return;
+    fetch('/api/settings/check', {
+      headers: adminToken ? { 'X-Admin-Token': adminToken } : {},
+    }).then(r => {
+      if (r.status === 401) logout();
+    }).catch(() => {});
+  }, []);
 
   if (!adminPinValid) {
     const handleLogin = (e: React.FormEvent) => {

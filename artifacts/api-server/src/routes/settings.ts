@@ -30,6 +30,16 @@ export function isValidAdminSession(token: string | undefined): boolean {
 
 const router = Router();
 
+/** GET /check — returns 200 if the current X-Admin-Token is valid, 401 otherwise */
+router.get("/check", (req, res) => {
+  const token = req.headers["x-admin-token"] as string | undefined;
+  if (!isValidAdminSession(token)) {
+    res.status(401).json({ valid: false });
+    return;
+  }
+  res.json({ valid: true });
+});
+
 async function getOrCreateSettings() {
   const [settings] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.id, 1));
   if (settings) return settings;
