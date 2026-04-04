@@ -20,7 +20,7 @@ const ROLE_SHORT: Record<string, string> = {
 };
 const ALL_PANEL_ROLES = ['judge_a', 'judge_b', 'judge_c', 'judge_d', 'judge_e'];
 
-// ─── Data hooks ───────────────────────────────────────────────────────────────
+// ─── Data hook ────────────────────────────────────────────────────────────────
 function useActiveTournamentInfo() {
   const params = new URLSearchParams(window.location.search);
   const tid = params.get('t') ? parseInt(params.get('t')!, 10) : null;
@@ -47,6 +47,19 @@ function useActiveTournamentInfo() {
     refetchInterval: 2000,
   });
 
+  // Skiers list — needed to look up club for the active skier
+  const { data: skiers } = useQuery({
+    queryKey: ['live-skiers', tid],
+    queryFn: async () => {
+      if (!tid) return [];
+      const r = await fetch(`/api/tournaments/${tid}/skiers`);
+      return r.ok ? r.json() : [];
+    },
+    enabled: !!tid,
+    refetchInterval: 30000,
+    staleTime: 20000,
+  });
+
   const allPasses: any[] = passes ?? [];
   const activePass = allPasses.find((p: any) => p.status === 'pending') ?? null;
 
@@ -61,7 +74,7 @@ function useActiveTournamentInfo() {
     refetchInterval: 1500,
   });
 
-  // Personal best check — refetch every 15s, only when there's an active pass
+  // Personal best check — only fires when there's an active pass
   const { data: pbData } = useQuery({
     queryKey: ['live-pb', activePass?.skier_name, activePass?.division, activePass?.id],
     queryFn: async () => {
@@ -79,9 +92,20 @@ function useActiveTournamentInfo() {
     refetchInterval: 15000,
   });
 
-  // ── Derived data (computed locally from already-fetched passes) ──────────────
+  // ── Derived data ─────────────────────────────────────────────────────────────
 
-  const completedPasses = allPasses.filter((p: any) => p.status === 'complete' && p.buoys_scored !== null);
+  const allSkiers: any[] = skiers ?? [];
+  const completedPasses = allPasses
+    .filter((p: any) => p.status === 'complete' && p.buoys_scored !== null)
+    .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+  // Active skier's club — matched from skier register by name
+  const activeSkierRecord = activePass
+    ? allSkiers.find((s: any) =>
+        `${s.first_name} ${s.surname}`.toLowerCase() === activePass.skier_name.toLowerCase()
+      ) ?? null
+    : null;
+  const activeSkierClub: string | null = activeSkierRecord?.club ?? null;
 
   // Round-by-round history for the active skier in this tournament
   const skierHistory: any[] = activePass
@@ -90,11 +114,10 @@ function useActiveTournamentInfo() {
         .sort((a: any, b: any) => a.round_number - b.round_number)
     : [];
 
-  // Division standings: best score per skier in same division
+  // Division standings: best buoys_scored per skier in same division
   const divisionPasses = activePass
     ? completedPasses.filter((p: any) => (p.division || 'Open') === (activePass.division || 'Open'))
     : completedPasses;
-
   const skierBests: Record<string, number> = {};
   for (const p of divisionPasses) {
     if (skierBests[p.skier_name] === undefined || p.buoys_scored > skierBests[p.skier_name]) {
@@ -107,12 +130,28 @@ function useActiveTournamentInfo() {
     : 0;
   const divisionTotal = sortedSkiers.length;
 
-  // Last completed skier — best-effort "On Deck" (who just finished)
-  const lastCompleted: any = activePass
-    ? completedPasses
-        .filter((p: any) => p.skier_name !== activePass.skier_name)
-        .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0] ?? null
-    : null;
+  // On Deck: infer the NEXT skier from the previous round's run order.
+  // Find the active skier's position in the most-recent complete round they ran,
+  // then take the person who ran directly after them in that same round.
+  // Returns null if undeterminable.
+  let onDeckPass: any = null;
+  if (activePass && completedPasses.length > 0) {
+    // Find the most recent complete round the active skier appeared in
+    const activeSkierCompletedPasses = completedPasses.filter(
+      (p: any) => p.skier_name === activePass.skier_name
+    );
+    if (activeSkierCompletedPasses.length > 0) {
+      // Use the round with the highest round_number as reference for order
+      const refRound = Math.max(...activeSkierCompletedPasses.map((p: any) => p.round_number));
+      const refRoundPasses = completedPasses.filter((p: any) => p.round_number === refRound);
+      const activeIdx = refRoundPasses.findIndex((p: any) => p.skier_name === activePass.skier_name);
+      if (activeIdx >= 0 && activeIdx + 1 < refRoundPasses.length) {
+        // Next in the same round = On Deck
+        onDeckPass = refRoundPasses[activeIdx + 1];
+      }
+      // If the active skier was last in the reference round, we cannot infer without a start list
+    }
+  }
 
   // PB Candidate: compute estimated median of submitted scoring-judge scores
   const currentScores: any[] = scores ?? [];
@@ -136,12 +175,12 @@ function useActiveTournamentInfo() {
     tournament,
     activePass,
     scores: currentScores,
+    activeSkierClub,
     skierHistory,
     activeSkierRank,
     divisionTotal,
-    lastCompleted,
+    onDeckPass,
     isPBCandidate,
-    estimatedScore,
   };
 }
 
@@ -150,7 +189,7 @@ export default function Live() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
-  const [devices, setDevices] = useState<VideoDevice[]>([]);
+  const [devices, setDevices] = useState<{ deviceId: string; label: string }[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>(
     () => localStorage.getItem(LS_DEVICE_KEY) ?? ''
   );
@@ -161,8 +200,8 @@ export default function Live() {
 
   const {
     tournament, activePass, scores,
-    skierHistory, activeSkierRank, divisionTotal,
-    lastCompleted, isPBCandidate,
+    activeSkierClub, skierHistory, activeSkierRank, divisionTotal,
+    onDeckPass, isPBCandidate,
   } = useActiveTournamentInfo();
 
   const refreshDevices = useCallback(async () => {
@@ -248,7 +287,7 @@ export default function Live() {
     return () => { if (hideTimer.current) clearTimeout(hideTimer.current); };
   }, []);
 
-  // Judge panel: determine expected panel roles
+  // Judge panel
   const judgeCount = tournament?.judge_count ?? 3;
   const panelRoles = ALL_PANEL_ROLES.slice(0, judgeCount);
   const cjScore = scores.find((s: any) => s.judge_role === 'chief_judge');
@@ -300,14 +339,12 @@ export default function Live() {
           </button>
 
           {tournament && (
-            <div className="mt-4 text-center">
-              <p className="text-slate-400 text-sm">{tournament.name}</p>
-            </div>
+            <p className="text-slate-400 text-sm mt-2">{tournament.name}</p>
           )}
         </div>
       )}
 
-      {/* ── Overlays (always visible) ─────────────────────────────────────────── */}
+      {/* ── Overlays ──────────────────────────────────────────────────────────── */}
 
       {/* Top-left: tournament name */}
       {tournament && (
@@ -319,7 +356,7 @@ export default function Live() {
         </div>
       )}
 
-      {/* Top-right: current skier panel — redesigned */}
+      {/* Top-right: current skier panel */}
       {activePass && (
         <div className="absolute top-4 right-4 bg-black/80 backdrop-blur-md text-white rounded-2xl px-5 py-4 max-w-[300px] space-y-2.5 text-right">
           {/* On Water pulse */}
@@ -328,8 +365,13 @@ export default function Live() {
             On Water
           </p>
 
-          {/* Name */}
+          {/* Skier name */}
           <p className="font-black text-3xl leading-tight tracking-tight">{activePass.skier_name}</p>
+
+          {/* Club (if available) */}
+          {activeSkierClub && (
+            <p className="text-slate-400 text-sm font-semibold -mt-1">{activeSkierClub}</p>
+          )}
 
           {/* Division + round + rope + speed */}
           <div className="flex items-center justify-end gap-1.5 flex-wrap">
@@ -341,23 +383,19 @@ export default function Live() {
             </span>
           </div>
 
-          {/* Round history for this skier */}
+          {/* Round history — "R1: 4.5b @ 13m" style */}
           {skierHistory.length > 0 && (
-            <div className="flex items-center justify-end gap-1.5 flex-wrap pt-0.5">
+            <div className="flex flex-col items-end gap-1 pt-0.5">
               {skierHistory.map((p: any) => (
-                <div
-                  key={p.id}
-                  className="text-right bg-white/10 px-2.5 py-1 rounded-lg min-w-[3rem]"
-                >
-                  <div className="text-[10px] text-slate-400 font-semibold">R{p.round_number}</div>
-                  <div className="text-base font-black text-white leading-none">{p.buoys_scored}</div>
-                  <div className="text-[9px] text-slate-500">{p.rope_length}m</div>
-                </div>
+                <span key={p.id} className="text-sm text-slate-300 font-semibold tabular-nums">
+                  R{p.round_number}: <span className="text-white font-black">{p.buoys_scored}b</span>
+                  <span className="text-slate-500"> @ {p.rope_length}m / {p.speed_kph}kph</span>
+                </span>
               ))}
             </div>
           )}
 
-          {/* Rank + PB candidate badge */}
+          {/* Standings rank + PB candidate badge */}
           <div className="flex items-center justify-end gap-2 flex-wrap pt-0.5">
             {activeSkierRank > 0 && divisionTotal > 0 && (
               <span className="text-[11px] bg-white/15 text-white px-2.5 py-1 rounded-lg font-bold">
@@ -408,7 +446,7 @@ export default function Live() {
             })}
           </div>
 
-          {/* CJ score — shown separately below numbered judges */}
+          {/* CJ score — separated below numbered judges */}
           {cjScore && (
             <div className="flex items-center gap-3 bg-black/80 backdrop-blur text-white px-4 py-2.5 rounded-xl border border-white/10">
               <span className="text-purple-400 text-sm font-black w-5 shrink-0">CJ</span>
@@ -420,15 +458,12 @@ export default function Live() {
         </div>
       )}
 
-      {/* Bottom-right: Last Up panel (best-effort "On Deck") */}
-      {lastCompleted && activePass && (
+      {/* Bottom-right: On Deck panel — next skier inferred from previous round sequence */}
+      {onDeckPass && activePass && (
         <div className="absolute bottom-16 right-4 bg-black/70 backdrop-blur-md text-white px-4 py-3 rounded-xl text-right space-y-0.5">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Last Up</p>
-          <p className="font-bold text-lg leading-tight">{lastCompleted.skier_name}</p>
-          <p className="text-sm text-slate-300">{lastCompleted.division || 'Open'}</p>
-          {lastCompleted.buoys_scored !== null && lastCompleted.buoys_scored !== undefined && (
-            <p className="text-base font-black text-emerald-400 leading-none pt-0.5">{lastCompleted.buoys_scored}</p>
-          )}
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">On Deck</p>
+          <p className="font-bold text-lg leading-tight">{onDeckPass.skier_name}</p>
+          <p className="text-sm text-slate-300">{onDeckPass.division || 'Open'}</p>
         </div>
       )}
 
