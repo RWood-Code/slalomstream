@@ -1566,10 +1566,8 @@ function DisputeModal({ passId, onClose }: { passId: number; onClose: () => void
     setOverrideError(null);
 
     try {
-      // Step 1 — identity-based PIN validation via judges/verify-pin.
-      // This endpoint requires an exact PIN match in the database and never grants
-      // blanket access regardless of admin_pin configuration — so it is safe to use
-      // for role checking. Only chief_judge role or is_admin=true officials are authorised.
+      // Step 1 — verify PIN via judges/verify-pin (identity-based; requires exact DB match).
+      // Authorised if is_admin=true or judge_role='chief_judge'.
       if (!passData?.tournament_id) {
         setOverrideError('Cannot verify PIN — tournament context missing.');
         setOverrideLoading(false);
