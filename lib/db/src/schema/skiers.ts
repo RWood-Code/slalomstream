@@ -8,6 +8,7 @@ export const skiersTable = pgTable("skiers", {
   first_name: text("first_name").notNull(),
   surname: text("surname").notNull(),
   division: text("division"),
+  club: text("club"),
   skier_id: text("skier_id"),
   pin: text("pin"),
   is_financial: boolean("is_financial").notNull().default(true),

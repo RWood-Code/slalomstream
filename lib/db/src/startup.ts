@@ -136,6 +136,7 @@ const COLUMN_PATCHES: string[] = [
   `ALTER TABLE officials_register ADD COLUMN IF NOT EXISTS pin text`,
   `ALTER TABLE officials_register ADD COLUMN IF NOT EXISTS judge_role text`,
   `ALTER TABLE officials_register ADD COLUMN IF NOT EXISTS is_admin boolean NOT NULL DEFAULT false`,
+  `ALTER TABLE skiers ADD COLUMN IF NOT EXISTS club text`,
 ];
 
 async function applySchemaPatches() {

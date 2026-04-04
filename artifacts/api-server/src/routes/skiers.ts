@@ -18,6 +18,59 @@ router.post("/", async (req, res) => {
   res.status(201).json(skier);
 });
 
+// POST /bulk — import multiple skiers at once from a CSV start list.
+// Body: { skiers: Array<{ first_name, surname, division?, club?, pin? }> }
+// Skips rows where first_name+surname already exist in this tournament (case-insensitive).
+router.post("/bulk", async (req, res) => {
+  const tournamentId = parseInt((req.params as any).id);
+  const rows: any[] = Array.isArray(req.body.skiers) ? req.body.skiers : [];
+
+  const existing = await db
+    .select({ first_name: skiersTable.first_name, surname: skiersTable.surname })
+    .from(skiersTable)
+    .where(eq(skiersTable.tournament_id, tournamentId));
+
+  const existingKeys = new Set(
+    existing.map(s => `${s.first_name.toLowerCase()}||${s.surname.toLowerCase()}`)
+  );
+
+  let imported = 0;
+  let skipped = 0;
+  const errors: { row: number; reason: string }[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const first_name = String(row.first_name ?? '').trim();
+    const surname = String(row.surname ?? '').trim();
+    if (!first_name || !surname) {
+      errors.push({ row: i + 1, reason: 'Missing name' });
+      continue;
+    }
+    const key = `${first_name.toLowerCase()}||${surname.toLowerCase()}`;
+    if (existingKeys.has(key)) {
+      skipped++;
+      continue;
+    }
+    try {
+      const body = insertSkierSchema.parse({
+        tournament_id: tournamentId,
+        first_name,
+        surname,
+        division: row.division || null,
+        club: row.club || null,
+        pin: row.pin || null,
+      });
+      await db.insert(skiersTable).values(body);
+      existingKeys.add(key);
+      imported++;
+    } catch (err: any) {
+      errors.push({ row: i + 1, reason: err.message ?? 'Insert failed' });
+    }
+  }
+
+  res.json({ imported, skipped, errors });
+});
+
 export const skierRouter = Router();
 
 skierRouter.put("/:id", async (req, res) => {

@@ -147,6 +147,7 @@ export default function Admin() {
           <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground px-1 pt-2">Tournament</p>
           <ScoreCorrections tournamentId={activeTournamentId} />
           <EmsImportPanel tournamentId={activeTournamentId} />
+          <CsvImportPanel tournamentId={activeTournamentId} />
           <SkierManagement tournamentId={activeTournamentId} />
           <JudgeManagement tournamentId={activeTournamentId} />
         </div>
@@ -1055,6 +1056,320 @@ function EmsImportPanel({ tournamentId }: { tournamentId: number }) {
                 <Download className="w-4 h-4" />
                 Import {selected.size} Participant{selected.size !== 1 ? 's' : ''} into Tournament
               </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </AdminSection>
+  );
+}
+
+// ─── CSV Import ────────────────────────────────────────────────────────────────
+const CSV_FIELD_VARIANTS: Record<string, string[]> = {
+  name: ['name', 'skier', 'skiername', 'fullname', 'athlete', 'competitor'],
+  division: ['division', 'class', 'category', 'div', 'group', 'event'],
+  club: ['club', 'region', 'clubregion', 'team', 'organisation', 'association'],
+  pin: ['pin', 'id', 'pincode', 'code', 'password', 'skierid'],
+};
+type CsvField = 'name' | 'division' | 'club' | 'pin';
+
+interface ParsedCsvRow {
+  first_name: string;
+  surname: string;
+  division: string;
+  club: string;
+  pin: string;
+  status: 'valid' | 'warning' | 'error';
+  messages: string[];
+  selected: boolean;
+}
+
+function parseCSVText(text: string): string[][] {
+  const rows: string[][] = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    const cells: string[] = [];
+    let cur = '';
+    let inQuote = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuote && line[i + 1] === '"') { cur += '"'; i++; }
+        else inQuote = !inQuote;
+      } else if (ch === ',' && !inQuote) {
+        cells.push(cur.trim()); cur = '';
+      } else {
+        cur += ch;
+      }
+    }
+    cells.push(cur.trim());
+    rows.push(cells);
+  }
+  return rows;
+}
+
+function autoDetectCsvMapping(headers: string[]): Record<CsvField, string> {
+  const m: Record<CsvField, string> = { name: '', division: '', club: '', pin: '' };
+  for (const [field, variants] of Object.entries(CSV_FIELD_VARIANTS) as [CsvField, string[]][]) {
+    for (const header of headers) {
+      const norm = header.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (variants.some(v => norm === v || norm.startsWith(v))) { m[field] = header; break; }
+    }
+  }
+  return m;
+}
+
+function splitFullName(name: string): { first_name: string; surname: string } {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { first_name: '', surname: '' };
+  if (parts.length === 1) return { first_name: parts[0], surname: parts[0] };
+  const surname = parts.pop()!;
+  return { first_name: parts.join(' '), surname };
+}
+
+function buildCsvRows(rawRows: string[][], headers: string[], mapping: Record<CsvField, string>): ParsedCsvRow[] {
+  const idx = (f: CsvField) => mapping[f] ? headers.indexOf(mapping[f]) : -1;
+  const nIdx = idx('name'), dIdx = idx('division'), cIdx = idx('club'), pIdx = idx('pin');
+  return rawRows.map(cells => {
+    const rawName = nIdx >= 0 ? (cells[nIdx] ?? '').trim() : '';
+    const { first_name, surname } = splitFullName(rawName);
+    const division = dIdx >= 0 ? (cells[dIdx] ?? '').trim() : '';
+    const club     = cIdx >= 0 ? (cells[cIdx] ?? '').trim() : '';
+    const pin      = pIdx >= 0 ? (cells[pIdx] ?? '').trim() : '';
+    const messages: string[] = [];
+    let status: 'valid' | 'warning' | 'error' = 'valid';
+    if (!first_name) { messages.push('Name is required'); status = 'error'; }
+    if (division && !DIVISIONS.includes(division)) { messages.push(`"${division}" not in standard list — will import as-is`); if (status === 'valid') status = 'warning'; }
+    if (pin && !/^\d{4,8}$/.test(pin)) { messages.push('PIN should be 4–8 digits'); if (status === 'valid') status = 'warning'; }
+    return { first_name, surname, division, club, pin, status, messages, selected: status !== 'error' };
+  });
+}
+
+function CsvImportPanel({ tournamentId }: { tournamentId: number }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [stage, setStage] = useState<'input' | 'map' | 'preview'>('input');
+  const [rawText, setRawText] = useState('');
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [mapping, setMapping] = useState<Record<CsvField, string>>({ name: '', division: '', club: '', pin: '' });
+  const [rows, setRows] = useState<ParsedCsvRow[]>([]);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{ imported: number; skipped: number } | null>(null);
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => setRawText((ev.target?.result as string) ?? '');
+    reader.readAsText(file);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const parseCsv = () => {
+    const parsed = parseCSVText(rawText);
+    if (parsed.length < 2) { toast({ title: 'Need at least a header row and one data row', variant: 'destructive' }); return; }
+    const hdrs = parsed[0];
+    setHeaders(hdrs);
+    setMapping(autoDetectCsvMapping(hdrs));
+    setStage('map');
+  };
+
+  const applyMapping = () => {
+    const dataRows = parseCSVText(rawText).slice(1);
+    const built = buildCsvRows(dataRows, headers, mapping);
+    setRows(built);
+    setSelected(new Set(built.map((_, i) => i).filter(i => built[i].selected)));
+    setImportResult(null);
+    setStage('preview');
+  };
+
+  const importRows = async () => {
+    setImporting(true);
+    const toImport = rows
+      .filter((_, i) => selected.has(i))
+      .map(r => ({ first_name: r.first_name, surname: r.surname, division: r.division || undefined, club: r.club || undefined, pin: r.pin || undefined }));
+    try {
+      const res = await fetch(`/api/tournaments/${tournamentId}/skiers/bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skiers: toImport }),
+      });
+      const data = await res.json();
+      setImportResult({ imported: data.imported, skipped: data.skipped });
+      queryClient.invalidateQueries({ queryKey: ['/api/tournaments', tournamentId, 'skiers'] });
+      toast({ title: `${data.imported} imported, ${data.skipped} skipped (duplicates)` });
+    } catch {
+      toast({ title: 'Import failed', variant: 'destructive' });
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const reset = () => {
+    setStage('input'); setRawText(''); setHeaders([]); setRows([]); setSelected(new Set()); setImportResult(null);
+    setMapping({ name: '', division: '', club: '', pin: '' });
+  };
+
+  const validCount = rows.filter((_, i) => selected.has(i)).length;
+  const dataRowCount = rawText.trim() ? Math.max(0, parseCSVText(rawText).length - 1) : 0;
+
+  return (
+    <AdminSection
+      icon={<ClipboardPaste className="w-4 h-4" />}
+      title="Import from CSV"
+      subtitle="Paste or upload a CSV to bulk-load the start list — works fully offline"
+      borderClass="border-emerald-200 dark:border-emerald-900"
+    >
+      <div className="p-5 space-y-5">
+
+        {/* Stage 1: paste / upload */}
+        {stage === 'input' && (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Paste a CSV or upload a <code className="text-xs bg-muted px-1 rounded">.csv</code> file exported from any source — club membership system, spreadsheet, or previous tournament.
+              Accepted column names: <strong>name/skier</strong>, <strong>division/class/category</strong>, <strong>club/region</strong>, <strong>pin/id</strong>.
+            </p>
+            <textarea
+              className="w-full h-48 resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground/60"
+              placeholder={"name,division,club,pin\nJohn Smith,Open Men,Canterbury,1234\nJane Doe,U21 Women,Auckland,"}
+              value={rawText}
+              onChange={e => setRawText(e.target.value)}
+            />
+            <div className="flex items-center gap-3 flex-wrap">
+              <Button
+                variant="primary"
+                onClick={parseCsv}
+                disabled={!rawText.trim()}
+                className="flex items-center gap-2"
+              >
+                <ArrowRight className="w-4 h-4" /> Parse CSV
+              </Button>
+              <label className="flex items-center gap-2 cursor-pointer text-sm font-semibold text-muted-foreground hover:text-foreground transition-colors">
+                <input type="file" ref={fileInputRef} accept=".csv,text/csv" onChange={handleFile} className="hidden" />
+                <Download className="w-4 h-4" /> Upload .csv file
+              </label>
+              {rawText && <button onClick={reset} className="text-sm text-muted-foreground hover:text-foreground">Clear</button>}
+            </div>
+            {dataRowCount > 0 && (
+              <p className="text-xs text-muted-foreground">{dataRowCount} data row{dataRowCount !== 1 ? 's' : ''} detected</p>
+            )}
+          </div>
+        )}
+
+        {/* Stage 2: column mapping */}
+        {stage === 'map' && (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Columns were auto-detected from your headers. Adjust the mapping if needed, then preview the rows.
+            </p>
+            <div className="grid sm:grid-cols-2 gap-4">
+              {(['name', 'division', 'club', 'pin'] as CsvField[]).map(field => (
+                <div key={field}>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">
+                    {field === 'name' ? 'Name (required)' : field === 'division' ? 'Division' : field === 'club' ? 'Club / Region' : 'PIN / ID'}
+                  </label>
+                  <select
+                    value={mapping[field]}
+                    onChange={e => setMapping(prev => ({ ...prev, [field]: e.target.value }))}
+                    className="w-full h-9 border border-input rounded-lg px-2.5 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  >
+                    <option value="">— not mapped —</option>
+                    {headers.map(h => <option key={h} value={h}>{h}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+            <div className="p-3 bg-muted/50 rounded-xl text-xs text-muted-foreground font-mono space-y-0.5">
+              <p>{parseCSVText(rawText).length - 1} data rows · {headers.length} columns: {headers.join(', ')}</p>
+            </div>
+            <div className="flex gap-3 flex-wrap items-center">
+              <Button variant="primary" onClick={applyMapping} disabled={!mapping.name} className="flex items-center gap-2">
+                <ListChecks className="w-4 h-4" /> Preview Rows
+              </Button>
+              <Button variant="outline" onClick={() => setStage('input')}>Back</Button>
+              {!mapping.name && <p className="text-xs text-destructive font-semibold">Name column is required.</p>}
+            </div>
+          </div>
+        )}
+
+        {/* Stage 3: preview + import */}
+        {stage === 'preview' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <p className="text-sm font-bold flex items-center gap-1.5">
+                <ListChecks className="w-4 h-4 text-primary" />
+                {selected.size} of {rows.length} rows selected
+              </p>
+              <button
+                onClick={() => setSelected(prev => prev.size === rows.length ? new Set() : new Set(rows.map((_, i) => i)))}
+                className="text-xs text-primary hover:underline font-medium"
+              >
+                {selected.size === rows.length ? 'Deselect all' : 'Select all'}
+              </button>
+            </div>
+
+            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Valid</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Warning</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400 inline-block" />Error (excluded)</span>
+            </div>
+
+            <div className="max-h-80 overflow-y-auto rounded-xl border divide-y">
+              {rows.map((row, i) => (
+                <label key={i} className={`flex items-start gap-3 px-3 py-2.5 cursor-pointer hover:bg-muted/30 transition-colors ${!selected.has(i) ? 'opacity-40' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(i)}
+                    disabled={row.status === 'error'}
+                    onChange={() => setSelected(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; })}
+                    className="mt-0.5 rounded accent-primary"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${row.status === 'valid' ? 'bg-emerald-400' : row.status === 'warning' ? 'bg-amber-400' : 'bg-red-400'}`} />
+                      <p className="text-sm font-semibold">
+                        {row.first_name}{row.surname && row.surname !== row.first_name ? ` ${row.surname}` : ''}
+                      </p>
+                      {row.division && (
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${DIVISIONS.includes(row.division) ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'}`}>
+                          {row.division}
+                        </span>
+                      )}
+                      {row.club && <span className="text-[10px] text-muted-foreground">{row.club}</span>}
+                      {row.pin && <span className="text-[10px] font-mono text-muted-foreground bg-muted px-1 rounded">PIN: {row.pin}</span>}
+                    </div>
+                    {row.messages.length > 0 && (
+                      <p className={`text-[11px] mt-0.5 ${row.status === 'error' ? 'text-destructive' : 'text-amber-600 dark:text-amber-400'}`}>
+                        {row.messages.join(' · ')}
+                      </p>
+                    )}
+                  </div>
+                </label>
+              ))}
+            </div>
+
+            {importResult && (
+              <div className="flex items-center gap-2 p-3 bg-emerald-50 dark:bg-emerald-950/30 rounded-xl border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-medium text-sm">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                {importResult.imported} imported, {importResult.skipped} skipped (already in tournament)
+              </div>
+            )}
+
+            <div className="flex gap-3 flex-wrap">
+              <Button
+                variant="primary"
+                onClick={importRows}
+                isLoading={importing}
+                disabled={validCount === 0 || importing}
+                className="flex items-center gap-2"
+              >
+                <Download className="w-4 h-4" />
+                Import {validCount} Skier{validCount !== 1 ? 's' : ''} into Tournament
+              </Button>
+              <Button variant="outline" onClick={() => setStage('map')}>Back</Button>
+              <Button variant="outline" onClick={reset}>Start Over</Button>
             </div>
           </div>
         )}
