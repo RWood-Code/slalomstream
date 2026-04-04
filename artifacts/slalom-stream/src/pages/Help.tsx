@@ -5,8 +5,8 @@ import {
   ChevronDown, ChevronUp, Radio, Shield, HelpCircle, Globe, GitBranch
 } from 'lucide-react';
 
-const VERSION = '1.6.0';
-const RELEASE_DATE = 'March 2026';
+const VERSION = '1.7.0';
+const RELEASE_DATE = 'April 2026';
 
 interface SectionProps {
   icon: React.ElementType;
@@ -62,9 +62,23 @@ interface ReleaseEntry {
 
 const RELEASES: ReleaseEntry[] = [
   {
+    version: '1.7.0',
+    date: 'April 2026',
+    current: true,
+    items: [
+      'Windows installer — SlalomStream-Setup.exe bundles Node.js, the server, and the frontend into a single installer; double-click to install; creates a desktop shortcut; completely offline after install',
+      'Dropbox update push — "Push to Dropbox" button in Admin uploads the current build to your connected Dropbox and automatically saves the download URL; venue laptops fetch updates in one click',
+      'Start list CSV import — three-step wizard in Admin: paste or upload CSV, map columns (name, division, club, PIN), preview with duplicate/conflict detection; imports whole roster in one operation',
+      'SurePath health monitoring — green/amber/red status pill in Admin shows connection health and time since last pass received; Reconnect button available when health is not green; SurePathDot indicator in the Recording page header polls every 10 s',
+      'Official results PDF — one-click printable results sheet from the Scoreboard page; formatted for posting at the venue; shows all skiers ranked by best score',
+      'Personal Best detection — confetti animation and "PB!" badge when a skier sets a new personal best score during a pass',
+      'Chief Judge score override UI — Chief Judge panel shows all live judge scores with inline correction; re-collates the pass result instantly on save',
+      'Announcer overlay redesign — full-screen /live route rebuilt for TV/projector use; large skier name, score, and tournament branding with smooth transitions',
+    ],
+  },
+  {
     version: '1.6.0',
     date: 'March 2026',
-    current: true,
     items: [
       'One-click automatic update — venue admin clicks "Fetch & prepare update" and the server downloads the latest ZIP directly from the configured URL, scans it, and shows a version preview; no file download or upload required',
       'Download update ZIP button — saves the current build as a ZIP using the browser\'s fetch connection (fixes a 404 issue that occurred when navigating directly to the download URL)',
@@ -179,50 +193,36 @@ export default function Help() {
       </Section>
 
       {/* Local Install */}
-      <Section icon={Download} title="Getting SlalomStream — Local Installation">
+      <Section icon={Download} title="Getting SlalomStream — Windows Installer">
         <p className="text-muted-foreground">
-          SlalomStream is an open-source project — there is no packaged installer download.
-          You run it directly from the source code. Here's how to set it up on a local laptop for venue use.
+          SlalomStream ships as a self-contained Windows installer. No Node.js or database setup is needed — everything is bundled inside.
         </p>
 
-        <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl text-sm">
-          <p className="font-bold mb-1">Prerequisites</p>
-          <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
-            <li>Node.js 20 or later</li>
-            <li>pnpm package manager (<Code>npm install -g pnpm</Code>)</li>
-            <li>A PostgreSQL database (local install or cloud-hosted)</li>
-          </ul>
+        <div className="p-4 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-xl space-y-2">
+          <p className="font-bold text-emerald-800 dark:text-emerald-200">Fresh install</p>
+          <div className="space-y-2 text-sm">
+            <Step n={1}>
+              Download <strong>SlalomStream-Setup.exe</strong> from the link provided by your tournament administrator (available in Admin → Software Update → the configured download URL).
+            </Step>
+            <Step n={2}>
+              Double-click the installer. Choose your installation folder and server port (default <Code>3000</Code>). Click Install.
+            </Step>
+            <Step n={3}>
+              A <strong>SlalomStream</strong> shortcut appears on your desktop. Double-click it to start the server and open it in your browser automatically.
+            </Step>
+            <Step n={4}>
+              On the <strong>Recording page</strong>, expand "Judge Station QR Codes". Judges scan their station QR code from any device on the same WiFi network.
+            </Step>
+          </div>
         </div>
 
-        <div className="space-y-3">
-          <Step n={1}>
-            <strong>Get the code</strong> — Fork or clone this project from Replit, or download it as a ZIP from the Replit editor (<em>⋮ menu → Download as ZIP</em>). Extract it to a folder on your laptop.
-          </Step>
-          <Step n={2}>
-            <strong>Install dependencies</strong> from inside the project folder:
-            <CodeBlock>{`pnpm install`}</CodeBlock>
-          </Step>
-          <Step n={3}>
-            <strong>Set your database URL</strong>. Create a <Code>.env</Code> file (or set the environment variable):
-            <CodeBlock>{`DATABASE_URL=postgresql://localhost/slalomstream`}</CodeBlock>
-          </Step>
-          <Step n={4}>
-            <strong>Push the schema</strong> (creates all tables):
-            <CodeBlock>{`pnpm --filter @workspace/db run push`}</CodeBlock>
-            The NZTWSA officials register is seeded automatically when the server first starts — no extra step needed.
-          </Step>
-          <Step n={5}>
-            <strong>Build and start</strong>:
-            <CodeBlock>{`pnpm --filter @workspace/api-server run build\npnpm --filter @workspace/slalom-stream run build\nPORT=3000 node artifacts/api-server/dist/index.js`}</CodeBlock>
-            The server serves both the API and the frontend from a single process. Open <Code>http://localhost:3000</Code> in a browser.
-          </Step>
-          <Step n={6}>
-            On the <strong>Recording page</strong>, expand "Judge Station QR Codes". Judges scan the QR code for their station — all devices must be on the same WiFi network as the laptop (or use Cloud mode if deployed online).
-          </Step>
+        <div className="p-4 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-xl space-y-2 mt-2">
+          <p className="font-bold text-blue-800 dark:text-blue-200">Updating an existing install</p>
+          <p className="text-sm text-muted-foreground">Go to <strong>Admin → Software Update</strong> and click <strong>Fetch &amp; prepare update</strong>. The server downloads the latest build from Dropbox, previews the version, and applies it with a one-click restart — no file download or upload needed.</p>
         </div>
 
         <div className="p-3 bg-muted/50 rounded-xl text-xs text-muted-foreground mt-2">
-          <strong>Tip:</strong> For reliable venue WiFi, connect the laptop to a portable hotspot or router and connect all judge phones to that same network. The server prints its local IP on startup.
+          <strong>Tip:</strong> For reliable venue WiFi, connect the laptop to a portable hotspot or router and connect all judge phones to that same network. The server's local IP is shown in Admin → Network.
         </div>
       </Section>
 

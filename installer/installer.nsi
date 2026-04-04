@@ -3,7 +3,7 @@
 ; Run build-installer.sh first to stage all required files.
 
 !define APP_NAME    "SlalomStream"
-!define APP_VERSION "1.6.0"
+!define APP_VERSION "1.7.0"
 !define PUBLISHER   "NZTWSA"
 !define REG_KEY     "Software\Microsoft\Windows\CurrentVersion\Uninstall\SlalomStream"
 
