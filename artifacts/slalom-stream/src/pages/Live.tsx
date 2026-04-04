@@ -130,26 +130,36 @@ function useActiveTournamentInfo() {
     : 0;
   const divisionTotal = sortedSkiers.length;
 
-  // On Deck: infer the NEXT skier from the previous round's run order.
-  // Find the active skier's position in the most-recent complete round they ran,
-  // then take the person who ran directly after them in that same round.
-  // Returns null if undeterminable.
+  // On Deck: infer the NEXT skier after the active skier from a prior round's run order.
+  // Primary: anchor to the most recently completed pass's round — find the active skier's
+  //   position there and return the skier one slot ahead.
+  // Fallback: use the highest round in which the active skier has a completed pass.
+  // Returns null when inference is undeterminable (first round, active skier was last, etc.).
   let onDeckPass: any = null;
   if (activePass && completedPasses.length > 0) {
-    // Find the most recent complete round the active skier appeared in
-    const activeSkierCompletedPasses = completedPasses.filter(
-      (p: any) => p.skier_name === activePass.skier_name
-    );
-    if (activeSkierCompletedPasses.length > 0) {
-      // Use the round with the highest round_number as reference for order
-      const refRound = Math.max(...activeSkierCompletedPasses.map((p: any) => p.round_number));
-      const refRoundPasses = completedPasses.filter((p: any) => p.round_number === refRound);
-      const activeIdx = refRoundPasses.findIndex((p: any) => p.skier_name === activePass.skier_name);
-      if (activeIdx >= 0 && activeIdx + 1 < refRoundPasses.length) {
-        // Next in the same round = On Deck
-        onDeckPass = refRoundPasses[activeIdx + 1];
+    const tryInferNextFromRound = (round: number): any => {
+      const roundPasses = completedPasses.filter((p: any) => p.round_number === round);
+      const idx = roundPasses.findIndex((p: any) => p.skier_name === activePass.skier_name);
+      if (idx >= 0 && idx + 1 < roundPasses.length) {
+        const candidate = roundPasses[idx + 1];
+        // Skip the candidate if they happen to be the current active pass skier
+        return candidate.skier_name !== activePass.skier_name ? candidate : null;
       }
-      // If the active skier was last in the reference round, we cannot infer without a start list
+      return null;
+    };
+
+    // Primary: most recently completed pass's round as reference
+    const lastCompleted = completedPasses[completedPasses.length - 1];
+    onDeckPass = tryInferNextFromRound(lastCompleted.round_number);
+
+    // Fallback: active skier's own highest completed round
+    if (!onDeckPass) {
+      const activeSkierRounds = completedPasses
+        .filter((p: any) => p.skier_name === activePass.skier_name)
+        .map((p: any) => p.round_number);
+      if (activeSkierRounds.length > 0) {
+        onDeckPass = tryInferNextFromRound(Math.max(...activeSkierRounds));
+      }
     }
   }
 
@@ -383,10 +393,10 @@ export default function Live() {
             </span>
           </div>
 
-          {/* Round history — "R1: 4.5b @ 13m" style */}
+          {/* Round history — "R1: 4.5b @ 13m / 55kph" style, capped at 4 rows */}
           {skierHistory.length > 0 && (
             <div className="flex flex-col items-end gap-1 pt-0.5">
-              {skierHistory.map((p: any) => (
+              {skierHistory.slice(-4).map((p: any) => (
                 <span key={p.id} className="text-sm text-slate-300 font-semibold tabular-nums">
                   R{p.round_number}: <span className="text-white font-black">{p.buoys_scored}b</span>
                   <span className="text-slate-500"> @ {p.rope_length}m / {p.speed_kph}kph</span>
@@ -439,7 +449,7 @@ export default function Live() {
                     {ROLE_SHORT[role]}
                   </span>
                   <span className="flex items-center gap-1.5 text-slate-500 text-sm font-semibold">
-                    <Clock className="w-3.5 h-3.5 animate-pulse" /> Waiting
+                    <Clock className="w-3.5 h-3.5 animate-pulse" /> Waiting…
                   </span>
                 </div>
               );
