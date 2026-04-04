@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { passesTable, judgeScoresTable, tournamentsTable, insertPassSchema } from "@workspace/db";
-import { eq, desc, and, inArray, ilike } from "drizzle-orm";
+import { eq, desc, and, inArray, ilike, ne, isNotNull, max } from "drizzle-orm";
 
 const ALL_SCORING_ROLES = ['judge_a', 'judge_b', 'judge_c', 'judge_d', 'judge_e'];
 function getScoringRoles(judgeCount: number): string[] {
@@ -24,6 +24,74 @@ router.post("/", async (req, res) => {
 });
 
 export const passRouter = Router();
+
+// GET /api/passes/personal-best?name=X&division=Y&exclude_pass_id=Z
+// Returns the all-time highest buoys_scored for a given skier (by name+division),
+// excluding one pass ID (the current one being checked, to avoid counting it as its own PB).
+passRouter.get("/personal-best", async (req, res) => {
+  const name = String(req.query.name ?? '').trim();
+  const division = String(req.query.division ?? '').trim();
+  const excludeId = req.query.exclude_pass_id ? parseInt(String(req.query.exclude_pass_id)) : null;
+
+  if (!name) return res.status(400).json({ error: "name required" });
+
+  const conditions = [
+    eq(passesTable.skier_name, name),
+    ne(passesTable.status, 'pending'),
+    isNotNull(passesTable.buoys_scored),
+    ...(division ? [eq(passesTable.division, division)] : []),
+    ...(excludeId ? [ne(passesTable.id, excludeId)] : []),
+  ];
+
+  const [result] = await db
+    .select({ best: max(passesTable.buoys_scored) })
+    .from(passesTable)
+    .where(and(...conditions));
+
+  res.json({ best: result?.best ?? null });
+});
+
+// GET /api/passes/personal-bests?tournament_id=X
+// Returns a map of "skierName||division" → all-time max buoys_scored for every skier
+// who has a pass in that tournament (across all tournaments).
+passRouter.get("/personal-bests", async (req, res) => {
+  const tournamentId = parseInt(String(req.query.tournament_id ?? ''));
+  if (!tournamentId || isNaN(tournamentId)) return res.status(400).json({ error: "tournament_id required" });
+
+  // Get distinct skier names in this tournament
+  const tournamentSkiers = await db
+    .selectDistinct({ skier_name: passesTable.skier_name, division: passesTable.division })
+    .from(passesTable)
+    .where(eq(passesTable.tournament_id, tournamentId));
+
+  if (tournamentSkiers.length === 0) return res.json({});
+
+  const names = tournamentSkiers.map(s => s.skier_name);
+
+  // Single query: max buoys_scored grouped by (skier_name, division) across ALL tournaments
+  const rows = await db
+    .select({
+      skier_name: passesTable.skier_name,
+      division: passesTable.division,
+      best: max(passesTable.buoys_scored),
+    })
+    .from(passesTable)
+    .where(and(
+      inArray(passesTable.skier_name, names),
+      ne(passesTable.status, 'pending'),
+      isNotNull(passesTable.buoys_scored),
+    ))
+    .groupBy(passesTable.skier_name, passesTable.division);
+
+  const map: Record<string, number> = {};
+  for (const row of rows) {
+    if (row.best !== null && row.best !== undefined) {
+      const key = `${row.skier_name}||${row.division ?? 'Open'}`;
+      map[key] = row.best;
+    }
+  }
+  res.json(map);
+});
 
 // GET /api/passes/search?q=skierName — search passes across all tournaments
 passRouter.get("/search", async (req, res) => {

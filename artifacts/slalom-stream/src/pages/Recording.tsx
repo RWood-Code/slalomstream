@@ -10,7 +10,7 @@ import {
   Camera, CameraOff, Circle, Square, Maximize2, RefreshCw,
   CheckCircle2, Download, ExternalLink, SwitchCamera,
   X, Monitor, Gauge, MonitorPlay, FolderOpen, FolderPlus,
-  Clock, Flag, AlertTriangle, FileSearch, UserPlus,
+  Clock, Flag, AlertTriangle, FileSearch, UserPlus, Trophy,
 } from 'lucide-react';
 import { ROPE_LENGTHS, SPEEDS, VALID_IWWF_SCORES, DIVISIONS, formatRope, formatSpeed, getRopeColour, getJudgingPanel, suggestNextRope } from '@/lib/utils';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
@@ -945,6 +945,9 @@ export default function Recording() {
   const [showAddSkier, setShowAddSkier] = useState(false);
   const [addSkierForm, setAddSkierForm] = useState({ first_name: '', surname: '', division: DIVISIONS[0] });
   const [addSkierError, setAddSkierError] = useState<string | null>(null);
+  const [pbCallout, setPbCallout] = useState<{ skierName: string; score: number } | null>(null);
+  // 'initial' sentinel prevents a PB callout for passes that were already in the DB when the page loads
+  const lastCheckedPassIdRef = useRef<number | 'initial' | null>('initial');
 
   // Rope pre-fill: when skierId changes, look at that skier's last pass and suggest next rope
   useEffect(() => {
@@ -984,8 +987,49 @@ export default function Recording() {
     } else if (!curr && prev && video.mode === 'recording') {
       video.stopRecording();
     }
+
+    // Clear PB callout when a new pass starts
+    if (curr && !prev) setPbCallout(null);
+
     prevActivePassId.current = curr;
   }, [activePass?.id]);
+
+  // PB detection: fires whenever the recent passes list changes.
+  // Skips the first render (uses 'initial' sentinel) so historical passes
+  // already in the DB when the page loads don't trigger a false PB callout.
+  useEffect(() => {
+    const latest = recentPasses[0];
+
+    // On first load, just record the current top pass and skip checking
+    if (lastCheckedPassIdRef.current === 'initial') {
+      lastCheckedPassIdRef.current = latest?.id ?? null;
+      return;
+    }
+
+    if (!latest) return;
+    if (latest.buoys_scored === null || latest.buoys_scored === undefined) return;
+    if (latest.id === lastCheckedPassIdRef.current) return; // already checked this pass
+
+    lastCheckedPassIdRef.current = latest.id;
+
+    (async () => {
+      try {
+        const params = new URLSearchParams({
+          name: latest.skier_name,
+          division: latest.division || 'Open',
+          exclude_pass_id: String(latest.id),
+        });
+        const r = await fetch(`/api/passes/personal-best?${params}`);
+        if (!r.ok) return;
+        const data = await r.json();
+        const historicalBest: number | null = data.best;
+        // Strict > only; ties are NOT a new PB
+        if (historicalBest === null || latest.buoys_scored > historicalBest) {
+          setPbCallout({ skierName: latest.skier_name, score: latest.buoys_scored });
+        }
+      } catch { /* silently ignore network errors */ }
+    })();
+  }, [recentPasses]);
 
   const createMutation = useCreatePass({
     mutation: {
@@ -1100,6 +1144,26 @@ export default function Recording() {
           </div>
         }
       />
+
+      {/* ── Personal Best callout ── */}
+      {pbCallout && (
+        <div className="flex items-center gap-3 bg-amber-500/15 border border-amber-500/40 rounded-2xl px-4 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
+          <Trophy className="w-5 h-5 text-amber-500 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <span className="font-black text-amber-600 dark:text-amber-400 text-sm tracking-wide uppercase mr-2">New Personal Best!</span>
+            <span className="text-sm font-semibold">
+              {pbCallout.skierName} — {pbCallout.score % 1 === 0 ? pbCallout.score : pbCallout.score.toFixed(1)} buoys
+            </span>
+          </div>
+          <button
+            onClick={() => setPbCallout(null)}
+            className="text-muted-foreground hover:text-foreground transition-colors p-1"
+            aria-label="Dismiss"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       <div className="grid xl:grid-cols-5 gap-5">
         {/* ── Left column: Video + Judge/Lite panel ── */}

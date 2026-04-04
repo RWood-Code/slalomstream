@@ -4,6 +4,7 @@ import { useGetTournament, useListPasses } from '@workspace/api-client-react';
 import { Card, Badge, Button } from '@/components/ui/shared';
 import { Trophy, Activity, Tv, Printer, Download } from 'lucide-react';
 import { formatRope, getRopeColour } from '@/lib/utils';
+import { useQuery } from '@tanstack/react-query';
 
 // ── Class labels for print header ──────────────────────────────────────────────
 const CLASS_LABELS: Record<string, string> = {
@@ -22,11 +23,14 @@ interface RoundResult {
 interface SkierStat {
   id: number;
   name: string;
+  division: string;
   avg: number;
   bestRope: number;
   passesCount: number;
+  bestScore: number;
   /** round_number → result */
   rounds: Record<number, RoundResult>;
+  isPB: boolean;
 }
 
 export default function Scoreboard() {
@@ -37,6 +41,19 @@ export default function Scoreboard() {
   });
   const { data: passes } = useListPasses(activeTournamentId || 0, {
     query: { enabled: !!activeTournamentId, refetchInterval: 5000 },
+  });
+
+  // All-time personal bests for skiers in this tournament
+  const { data: pbMap } = useQuery<Record<string, number>>({
+    queryKey: ['/api/passes/personal-bests', activeTournamentId],
+    queryFn: async () => {
+      if (!activeTournamentId) return {};
+      const r = await fetch(`/api/passes/personal-bests?tournament_id=${activeTournamentId}`);
+      return r.ok ? r.json() : {};
+    },
+    enabled: !!activeTournamentId,
+    staleTime: 30000,
+    refetchInterval: 30000,
   });
 
   if (!activeTournamentId) {
@@ -71,8 +88,14 @@ export default function Scoreboard() {
       const scores = Object.values(rounds).map(r => r.score).sort((a, b) => b - a);
       const top2 = scores.slice(0, 2);
       const avg = top2.length > 0 ? top2.reduce((a, b) => a + b, 0) / top2.length : 0;
+      const bestScore = scores[0] ?? 0;
 
-      return { id: skierId, name, avg, bestRope, passesCount: sp.length, rounds };
+      // PB: this tournament's best score equals the all-time best (i.e. the record was set here)
+      const pbKey = `${name}||${div}`;
+      const allTimeBest = pbMap?.[pbKey] ?? null;
+      const isPB = allTimeBest !== null && bestScore > 0 && bestScore >= allTimeBest;
+
+      return { id: skierId, name, division: div, avg, bestRope, passesCount: sp.length, bestScore, rounds, isPB };
     });
 
     skierStats.sort((a, b) => {
@@ -169,7 +192,10 @@ export default function Scoreboard() {
                       <td className="border border-gray-300 px-2 py-1.5 text-center font-bold text-gray-500">
                         {idx + 1}
                       </td>
-                      <td className="border border-gray-300 px-2 py-1.5 font-semibold">{skier.name}</td>
+                      <td className="border border-gray-300 px-2 py-1.5 font-semibold">
+                        {skier.name}
+                        {skier.isPB && <span className="ml-1.5 text-[9px] font-black uppercase tracking-wide text-amber-600 border border-amber-400 rounded px-1 py-0.5">PB</span>}
+                      </td>
                       {allRoundNumbers.map(r => {
                         const res = skier.rounds[r];
                         return (
@@ -267,7 +293,14 @@ export default function Scoreboard() {
                           {medal ?? index + 1}
                         </div>
                         <div className="flex-1 px-3 min-w-0">
-                          <p className="font-bold text-base leading-tight truncate">{skier.name}</p>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <p className="font-bold text-base leading-tight truncate">{skier.name}</p>
+                            {skier.isPB && (
+                              <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wide bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30">
+                                <Trophy className="w-2.5 h-2.5 mr-0.5" />PB
+                              </span>
+                            )}
+                          </div>
                           <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                             <span
                               className="inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold"
