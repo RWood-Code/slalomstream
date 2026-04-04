@@ -11,7 +11,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { appSettingsTable, passesTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { getSurePathStatus, startSurePathClient, stopSurePathClient } from "../services/surepath-client";
+import { getSurePathStatus, startSurePathClient, stopSurePathClient, recordExternalMessage } from "../services/surepath-client";
 
 const router = Router();
 
@@ -83,6 +83,8 @@ router.post("/inbound", async (req, res) => {
 
   lastInbound = { ts: new Date().toISOString(), data: req.body };
   inboundCount++;
+  // Keep the SurePath status indicator up-to-date even when using the webhook path
+  recordExternalMessage('webhook_inbound');
 
   res.status(201).json({ success: true, pass });
 });

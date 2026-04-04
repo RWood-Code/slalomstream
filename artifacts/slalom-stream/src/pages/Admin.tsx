@@ -497,6 +497,29 @@ function SurePathPanel() {
   const isConnected = sp?.connected;
   const isConnecting = sp?.connecting;
 
+  // Compute age of last message in seconds
+  const lastMsgAgeSec = sp?.lastMessage?.ts
+    ? Math.floor((Date.now() - new Date(sp.lastMessage.ts).getTime()) / 1000)
+    : null;
+
+  // Three-level health: green = connected + msg ≤60s, amber = connected or connecting but stale/no msg, red = offline
+  const health: 'green' | 'amber' | 'red' =
+    isConnected && lastMsgAgeSec !== null && lastMsgAgeSec <= 60 ? 'green' :
+    isConnected || isConnecting ? 'amber' :
+    'red';
+
+  // Human-readable relative time
+  const relTime = (ts: string | null): string => {
+    if (!ts) return 'Never';
+    const ageSec = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+    if (ageSec < 5) return 'just now';
+    if (ageSec < 60) return `${ageSec}s ago`;
+    const m = Math.floor(ageSec / 60);
+    if (m < 60) return `${m} min ago`;
+    const h = Math.floor(m / 60);
+    return `${h} hr ago`;
+  };
+
   const save = () => saveMutation.mutate({
     surepath_enabled: enabled,
     surepath_event_name: eventName || null,
@@ -505,18 +528,21 @@ function SurePathPanel() {
     waterskiconnect_url: wsUrl || null,
   });
 
-  const badge = isConnected
-    ? <Badge variant="success" className="flex items-center gap-1 text-xs"><PlugZap className="w-2.5 h-2.5" /> Live</Badge>
-    : isConnecting
-      ? <Badge variant="outline" className="text-amber-600 border-amber-300 text-xs flex items-center gap-1"><Plug className="w-2.5 h-2.5 animate-pulse" /> Connecting</Badge>
-      : <Badge variant="outline" className="text-muted-foreground text-xs">Offline</Badge>;
+  const healthBadge =
+    health === 'green' ? (
+      <Badge variant="success" className="flex items-center gap-1 text-xs"><PlugZap className="w-2.5 h-2.5" /> Live</Badge>
+    ) : health === 'amber' ? (
+      <Badge variant="outline" className="text-amber-600 border-amber-300 text-xs flex items-center gap-1"><Plug className="w-2.5 h-2.5 animate-pulse" />{isConnecting ? 'Connecting' : 'Stale'}</Badge>
+    ) : (
+      <Badge variant="outline" className="text-muted-foreground text-xs">Offline</Badge>
+    );
 
   return (
     <AdminSection
       icon={<Waves className="w-4 h-4" />}
       title="SurePath Live"
       subtitle="Auto-create passes when SurePath boat speed exceeds 30 km/h"
-      badge={badge}
+      badge={healthBadge}
     >
       <div className="p-5 space-y-5">
         <p className="text-sm text-muted-foreground">
@@ -550,8 +576,13 @@ function SurePathPanel() {
           <Button variant="primary" isLoading={saveMutation.isPending} onClick={save}>Save Settings</Button>
           {enabled && (
             <>
-              <Button variant="outline" isLoading={reconnectMutation.isPending} onClick={() => reconnectMutation.mutate()}>
-                <RefreshCw className="w-4 h-4 mr-2" /> Reconnect
+              <Button
+                variant={health !== 'green' ? 'primary' : 'outline'}
+                isLoading={reconnectMutation.isPending}
+                onClick={() => reconnectMutation.mutate()}
+                className={health !== 'green' ? 'flex items-center gap-2' : 'flex items-center gap-2'}
+              >
+                <RefreshCw className="w-4 h-4" /> Reconnect
               </Button>
               {isConnected && (
                 <Button variant="outline" isLoading={disconnectMutation.isPending} onClick={() => disconnectMutation.mutate()} className="text-destructive hover:bg-destructive/10">
@@ -563,33 +594,47 @@ function SurePathPanel() {
         </div>
 
         {enabled && (
-          <div className="p-4 bg-muted/50 rounded-xl border space-y-2">
-            <div className="flex items-center justify-between mb-1">
+          <div className="p-4 bg-muted/50 rounded-xl border space-y-3">
+            <div className="flex items-center justify-between">
               <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Connection Status</p>
-              <button onClick={() => refetchStatus()} className="text-muted-foreground hover:text-foreground">
+              <button onClick={() => refetchStatus()} className="text-muted-foreground hover:text-foreground transition-colors" title="Refresh">
                 <RefreshCw className="w-3.5 h-3.5" />
               </button>
             </div>
-            <div className="grid grid-cols-2 gap-1 text-sm">
-              <span className="text-muted-foreground">Status</span>
-              <span className="font-mono font-bold">
-                {isConnected ? '🟢 Connected' : isConnecting ? '🟡 Connecting…' : '🔴 Disconnected'}
+
+            {/* Status pill */}
+            <div className="flex items-center gap-2">
+              <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${health === 'green' ? 'bg-emerald-500' : health === 'amber' ? 'bg-amber-500 animate-pulse' : 'bg-red-500'}`} />
+              <span className="font-semibold text-sm">
+                {health === 'green' ? 'Connected — receiving data' : health === 'amber' ? (isConnecting ? 'Connecting…' : 'Connected but no recent data') : 'Disconnected'}
               </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1 text-sm">
               {sp?.connectedAt && (
-                <><span className="text-muted-foreground">Connected since</span><span className="font-mono text-xs">{new Date(sp.connectedAt).toLocaleTimeString()}</span></>
+                <><span className="text-muted-foreground">Connected since</span><span className="font-mono text-xs">{relTime(sp.connectedAt)}</span></>
               )}
               {sp?.eventName && (
                 <><span className="text-muted-foreground">Event</span><span className="font-mono text-xs">{sp.eventName}</span></>
               )}
               <span className="text-muted-foreground">Passes auto-created</span>
               <span className="font-mono font-bold">{sp?.passesCreated ?? 0}</span>
-              {sp?.lastMessage && (
-                <><span className="text-muted-foreground">Last message</span><span className="font-mono text-xs">{sp.lastMessage.type} at {new Date(sp.lastMessage.ts).toLocaleTimeString()}</span></>
-              )}
+              <span className="text-muted-foreground">Last pass received</span>
+              <span className={`font-mono text-xs ${health === 'amber' && sp?.lastMessage ? 'text-amber-600 dark:text-amber-400 font-semibold' : ''}`}>
+                {relTime(sp?.lastMessage?.ts ?? null)}
+              </span>
               {sp?.error && (
                 <><span className="text-muted-foreground">Error</span><span className="text-destructive text-xs font-mono">{sp.error}</span></>
               )}
             </div>
+
+            {health !== 'green' && (
+              <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
+                {health === 'red'
+                  ? 'Not connected. SlalomStream will retry every 15 s — or click Reconnect to try immediately.'
+                  : 'Connected but no recent pass data. Check your SurePath rover is running and the boat is on the water.'}
+              </p>
+            )}
           </div>
         )}
 

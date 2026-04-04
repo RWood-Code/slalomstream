@@ -147,6 +147,61 @@ function useSaveFolders(): SaveFolders {
   return { primaryHandle, backupHandle, hasDirectoryPicker, choosePrimary, chooseBackup, clearPrimary, clearBackup, saveToFolders };
 }
 
+// ─── SurePath connection status ───────────────────────────────────────────────
+interface SurePathStatusData {
+  connected: boolean;
+  connecting: boolean;
+  lastMessage: { ts: string; type: string } | null;
+  passesCreated: number;
+  error: string | null;
+}
+
+function useSurePathStatus() {
+  return useQuery<SurePathStatusData>({
+    queryKey: ['surepath-status'],
+    queryFn: async () => { const r = await fetch('/api/surepath/status'); return r.json(); },
+    refetchInterval: 10000,
+    staleTime: 8000,
+  });
+}
+
+function SurePathDot() {
+  const { data: sp } = useSurePathStatus();
+  if (!sp) return null;
+
+  const lastMsgAgeSec = sp.lastMessage?.ts
+    ? Math.floor((Date.now() - new Date(sp.lastMessage.ts).getTime()) / 1000)
+    : null;
+
+  const health: 'green' | 'amber' | 'red' =
+    sp.connected && lastMsgAgeSec !== null && lastMsgAgeSec <= 60 ? 'green' :
+    sp.connected || sp.connecting ? 'amber' :
+    'red';
+
+  const label =
+    health === 'green' ? 'SurePath: live' :
+    health === 'amber' ? (sp.connecting ? 'SurePath: connecting' : 'SurePath: stale') :
+    'SurePath: offline';
+
+  return (
+    <span
+      title={label + (sp.error ? ` — ${sp.error}` : '')}
+      className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-lg border transition-colors ${
+        health === 'green'
+          ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
+          : health === 'amber'
+            ? 'bg-amber-500/15 border-amber-500/30 text-amber-600 dark:text-amber-400'
+            : 'bg-red-500/10 border-red-500/20 text-red-500 dark:text-red-400'
+      }`}
+    >
+      <span className={`w-2 h-2 rounded-full shrink-0 ${
+        health === 'green' ? 'bg-emerald-500' : health === 'amber' ? 'bg-amber-500 animate-pulse' : 'bg-red-500'
+      }`} />
+      SurePath
+    </span>
+  );
+}
+
 // ─── Network info ─────────────────────────────────────────────────────────────
 interface NetworkInfo { addresses: { name: string; address: string; family: string }[]; port: string; urls: string[] }
 function useNetworkInfo() {
@@ -1115,6 +1170,7 @@ export default function Recording() {
         subtitle="Operator Control Panel"
         actions={
           <div className="flex items-center gap-2 flex-wrap justify-end">
+            <SurePathDot />
             <Badge variant={activePass ? "success" : "outline"} className={activePass ? "animate-pulse" : ""}>
               {activePass ? "● SKIER ON WATER" : "STANDBY"}
             </Badge>

@@ -46,6 +46,16 @@ export function getSurePathStatus(): SurePathStatus {
   return { ...status };
 }
 
+/**
+ * Called by external sources (e.g. the inbound webhook) so the status
+ * indicator stays accurate even when using the webhook path rather than
+ * the live WebSocket client.
+ */
+export function recordExternalMessage(type: string) {
+  status.lastMessage = { ts: new Date().toISOString(), type, raw: null };
+  status.passesCreated++;
+}
+
 export async function startSurePathClient() {
   const [settings] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.id, 1));
   if (!settings?.surepath_enabled) return;
