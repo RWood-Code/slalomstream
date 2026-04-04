@@ -455,7 +455,13 @@ function SurePathPanel() {
 
   const { data: wscStatus, refetch: refetchStatus } = useQuery({
     queryKey: ['wsc-status'],
-    queryFn: async () => { const r = await fetch('/api/waterskiconnect/status'); return r.json(); },
+    queryFn: async () => {
+      const [full, sp] = await Promise.all([
+        fetch('/api/waterskiconnect/status').then(r => r.json()),
+        fetch('/api/surepath/status').then(r => r.json()),
+      ]);
+      return { ...full, surepath: sp };
+    },
     refetchInterval: 5000,
   });
 
