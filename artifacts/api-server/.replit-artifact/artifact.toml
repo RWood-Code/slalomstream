@@ -13,8 +13,13 @@ paths = ["/api"]
 run = "pnpm --filter @workspace/api-server run dev"
 
 [services.production]
-build = "pnpm --filter @workspace/api-server run build"
-run = "pnpm --filter @workspace/api-server run start"
+build = ["sh", "-c", "pnpm --filter @workspace/api-server run build && PORT=8080 BASE_PATH=/ pnpm --filter @workspace/slalom-stream run build"]
+run = ["node", "artifacts/api-server/dist/index.cjs"]
+
+[services.production.env]
+PORT = "8080"
+SERVE_STATIC = "true"
+STATIC_DIR = "artifacts/slalom-stream/dist/public"
 
 [services.production.health.startup]
 path = "/api/healthz"
