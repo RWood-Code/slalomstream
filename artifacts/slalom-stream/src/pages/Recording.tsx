@@ -1508,53 +1508,305 @@ function FlagButtons({ passId }: { passId: number }) {
 }
 
 // ─── Dispute Review Modal ─────────────────────────────────────────────────────
+const ROLE_LABELS: Record<string, string> = {
+  judge_a: 'Judge A', judge_b: 'Judge B', judge_c: 'Judge C',
+  judge_d: 'Judge D', judge_e: 'Judge E', chief_judge: 'Chief Judge',
+};
+
+function formatScore(s: string) {
+  return s === '6_no_gates' ? '6 (no gates)' : s;
+}
+
 function DisputeModal({ passId, onClose }: { passId: number; onClose: () => void }) {
-  const { data: scores } = usePassJudgeScores(passId);
+  const { data: scores, refetch: refetchScores } = usePassJudgeScores(passId);
   const { data: passData } = useQuery({
     queryKey: ['/api/passes', passId],
     queryFn: async () => { const r = await fetch(`/api/passes/${passId}`); return r.json(); },
+    refetchInterval: 2000,
   });
+  const queryClient = useQueryClient();
 
-  const ROLE_LABELS: Record<string, string> = {
-    judge_a: 'Judge A', judge_b: 'Judge B', judge_c: 'Judge C',
-    judge_d: 'Judge D', judge_e: 'Judge E', chief_judge: 'Chief Judge',
+  // CJ Override state
+  const [overrideMode, setOverrideMode] = useState(false);
+  const [selectedScoreId, setSelectedScoreId] = useState<number | null>(null);
+  const [newScore, setNewScore] = useState<string>(VALID_IWWF_SCORES[10]); // default '6'
+  const [overridePin, setOverridePin] = useState('');
+  const [overrideError, setOverrideError] = useState<string | null>(null);
+  const [overrideLoading, setOverrideLoading] = useState(false);
+  const [overrideSuccess, setOverrideSuccess] = useState(false);
+
+  const isPending = passData?.status === 'pending';
+  const hasScores = scores && scores.length > 0;
+
+  const resetOverride = () => {
+    setOverrideMode(false);
+    setSelectedScoreId(null);
+    setNewScore(VALID_IWWF_SCORES[10]);
+    setOverridePin('');
+    setOverrideError(null);
+    setOverrideSuccess(false);
+  };
+
+  const handleSelectScore = (id: number, currentScore: string) => {
+    setSelectedScoreId(id);
+    setNewScore(currentScore);
+    setOverrideError(null);
+  };
+
+  const handleApplyOverride = async () => {
+    if (!selectedScoreId) {
+      setOverrideError('Select a judge score row to override.');
+      return;
+    }
+    if (!overridePin.trim()) {
+      setOverrideError('Enter your PIN to confirm the override.');
+      return;
+    }
+    setOverrideLoading(true);
+    setOverrideError(null);
+
+    try {
+      // Step 1 — verify PIN has admin or chief_judge authority
+      let authorised = false;
+
+      // Check is_admin authority via the admin endpoint.
+      // Returns valid:true when the PIN matches the global admin PIN or an is_admin official.
+      // (When no admin_pin is configured, the system is in "open access" mode and any PIN is valid.)
+      const adminRes = await fetch('/api/admin/verify-pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: overridePin.trim() }),
+      });
+      if (adminRes.ok) {
+        const adminData = await adminRes.json();
+        if (adminData.valid) authorised = true;
+      }
+
+      // If not admin, check if they're the chief_judge in this tournament
+      if (!authorised && passData?.tournament_id) {
+        const cjRes = await fetch('/api/judges/verify-pin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tournament_id: passData.tournament_id, pin: overridePin.trim() }),
+        });
+        if (cjRes.ok) {
+          const cjData = await cjRes.json();
+          if (cjData.judge_role === 'chief_judge') authorised = true;
+        }
+      }
+
+      if (!authorised) {
+        setOverrideError('Invalid PIN — only the Chief Judge or an admin may override scores.');
+        setOverrideLoading(false);
+        return;
+      }
+
+      // Step 2 — PATCH the judge score
+      const patchRes = await fetch(`/api/passes/${passId}/judge-scores/${selectedScoreId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pass_score: newScore }),
+      });
+
+      if (!patchRes.ok) {
+        const errBody = await patchRes.json().catch(() => ({}));
+        setOverrideError(errBody.error || 'Failed to update score. Please try again.');
+        setOverrideLoading(false);
+        return;
+      }
+
+      // Step 3 — success, refresh caches
+      setOverrideSuccess(true);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['pass-judge-scores', passId] }),
+        queryClient.invalidateQueries({ queryKey: ['/api/passes', passId] }),
+        queryClient.invalidateQueries({ queryKey: ['passes'] }),
+      ]);
+      await refetchScores();
+
+      // Auto-return to dispute view after brief success display
+      setTimeout(() => resetOverride(), 1500);
+    } catch {
+      setOverrideError('Network error. Please try again.');
+    } finally {
+      setOverrideLoading(false);
+    }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={!overrideMode ? onClose : undefined}>
       <div className="bg-card rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4" onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="font-bold text-lg leading-none">{passData?.skier_name ?? '…'}</h3>
-            <p className="text-sm text-muted-foreground mt-1">
-              Rnd {passData?.round_number} · {passData?.speed_kph}kph · {passData?.rope_length}m
-            </p>
+            {overrideMode ? (
+              <>
+                <h3 className="font-bold text-lg leading-none flex items-center gap-2">
+                  <Flag className="w-4 h-4 text-amber-500" /> CJ Score Override
+                </h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  {passData?.skier_name ?? '…'} · Rnd {passData?.round_number}
+                </p>
+              </>
+            ) : (
+              <>
+                <h3 className="font-bold text-lg leading-none">{passData?.skier_name ?? '…'}</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Rnd {passData?.round_number} · {passData?.speed_kph}kph · {passData?.rope_length}m
+                </p>
+              </>
+            )}
           </div>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-muted transition-colors">
+          <button
+            onClick={overrideMode ? resetOverride : onClose}
+            className="p-2 rounded-xl hover:bg-muted transition-colors"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="border-t pt-4 space-y-2">
-          <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">Judge Scores</p>
-          {!scores || scores.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-4">No judge scores recorded</p>
-          ) : (
-            (scores as any[]).map(s => (
-              <div key={s.id} className="flex items-center justify-between p-3 bg-muted/50 rounded-xl">
-                <span className="font-semibold text-sm">{ROLE_LABELS[s.judge_role] ?? s.judge_role}</span>
-                <span className="font-display font-black text-xl text-primary">
-                  {s.pass_score === '6_no_gates' ? '6 (no gates)' : s.pass_score}
-                </span>
-              </div>
-            ))
-          )}
-        </div>
+        {/* Normal dispute view */}
+        {!overrideMode && (
+          <>
+            <div className="border-t pt-4 space-y-2">
+              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">Judge Scores</p>
+              {!scores || scores.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">No judge scores recorded</p>
+              ) : (
+                (scores as any[]).map(s => (
+                  <div key={s.id} className="flex items-center justify-between p-3 bg-muted/50 rounded-xl">
+                    <span className="font-semibold text-sm">{ROLE_LABELS[s.judge_role] ?? s.judge_role}</span>
+                    <span className="font-display font-black text-xl text-primary">
+                      {formatScore(s.pass_score)}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
 
-        {passData?.final_score !== null && passData?.final_score !== undefined && (
-          <div className="flex items-center justify-between p-3 bg-primary/10 rounded-xl border border-primary/20">
-            <span className="font-bold text-sm">Final Score</span>
-            <span className="font-display font-black text-2xl text-primary">{passData.final_score}</span>
+            {passData?.final_score !== null && passData?.final_score !== undefined && (
+              <div className="flex items-center justify-between p-3 bg-primary/10 rounded-xl border border-primary/20">
+                <span className="font-bold text-sm">Final Score</span>
+                <span className="font-display font-black text-2xl text-primary">{passData.final_score}</span>
+              </div>
+            )}
+
+            {/* CJ Override button — only shown for pending passes with scores */}
+            {isPending && hasScores && (
+              <div className="border-t pt-4">
+                <button
+                  onClick={() => setOverrideMode(true)}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 text-sm font-bold hover:bg-amber-500/20 transition-colors"
+                >
+                  <Flag className="w-4 h-4" /> CJ Override
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* CJ Override form */}
+        {overrideMode && (
+          <div className="border-t pt-4 space-y-4">
+            {overrideSuccess ? (
+              <div className="flex flex-col items-center gap-3 py-4">
+                <CheckCircle2 className="w-10 h-10 text-emerald-500" />
+                <p className="font-bold text-emerald-600 dark:text-emerald-400">Score updated successfully</p>
+              </div>
+            ) : (
+              <>
+                {/* Score selection */}
+                <div className="space-y-2">
+                  <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                    Select score to override
+                  </p>
+                  {(scores as any[]).map(s => {
+                    const isSelected = selectedScoreId === s.id;
+                    return (
+                      <div key={s.id}>
+                        <button
+                          onClick={() => handleSelectScore(s.id, s.pass_score)}
+                          className={`w-full flex items-center justify-between p-3 rounded-xl border transition-colors text-left ${
+                            isSelected
+                              ? 'border-amber-500 bg-amber-500/10'
+                              : 'border-border bg-muted/50 hover:border-amber-500/50 hover:bg-amber-500/5'
+                          }`}
+                        >
+                          <span className="font-semibold text-sm">{ROLE_LABELS[s.judge_role] ?? s.judge_role}</span>
+                          <span className={`font-display font-black text-xl ${isSelected ? 'text-amber-600 dark:text-amber-400' : 'text-primary'}`}>
+                            {formatScore(s.pass_score)}
+                          </span>
+                        </button>
+
+                        {/* New score picker — shown inline under selected row */}
+                        {isSelected && (
+                          <div className="mt-2 ml-3 flex items-center gap-3">
+                            <span className="text-xs text-muted-foreground font-semibold shrink-0">New score:</span>
+                            <select
+                              value={newScore}
+                              onChange={e => setNewScore(e.target.value)}
+                              className="flex-1 text-sm rounded-lg border border-amber-500/40 bg-card px-3 py-1.5 font-bold text-amber-700 dark:text-amber-300 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                            >
+                              {VALID_IWWF_SCORES.map(v => (
+                                <option key={v} value={v}>{formatScore(v)}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* PIN input */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                    Chief Judge / Admin PIN
+                  </label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={8}
+                    value={overridePin}
+                    onChange={e => { setOverridePin(e.target.value); setOverrideError(null); }}
+                    onKeyDown={e => e.key === 'Enter' && handleApplyOverride()}
+                    placeholder="Enter PIN"
+                    className="w-full text-sm rounded-xl border border-border bg-muted/50 px-3 py-2.5 font-mono tracking-widest focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                  />
+                </div>
+
+                {/* Error */}
+                {overrideError && (
+                  <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-600 dark:text-red-400 text-sm">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{overrideError}</span>
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div className="flex gap-2 pt-1">
+                  <button
+                    onClick={resetOverride}
+                    disabled={overrideLoading}
+                    className="flex-1 px-4 py-2.5 rounded-xl border border-border text-sm font-bold hover:bg-muted transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleApplyOverride}
+                    disabled={overrideLoading || !selectedScoreId || !overridePin.trim()}
+                    className="flex-1 px-4 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-bold hover:bg-amber-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {overrideLoading ? (
+                      <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Checking…</>
+                    ) : (
+                      <><Flag className="w-3.5 h-3.5" /> Apply Override</>
+                    )}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>
