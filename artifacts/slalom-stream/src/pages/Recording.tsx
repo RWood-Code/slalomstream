@@ -178,14 +178,24 @@ function SurePathDot() {
     sp.connected || sp.connecting ? 'amber' :
     'red';
 
-  const label =
+  const statusLabel =
     health === 'green' ? 'SurePath: live' :
     health === 'amber' ? (sp.connecting ? 'SurePath: connecting' : 'SurePath: stale') :
     'SurePath: offline';
 
+  const lastMsgLabel = sp.lastMessage?.ts
+    ? (() => {
+        const ageSec = Math.floor((Date.now() - new Date(sp.lastMessage.ts).getTime()) / 1000);
+        const rel = ageSec < 5 ? 'just now' : ageSec < 60 ? `${ageSec}s ago` : ageSec < 3600 ? `${Math.floor(ageSec / 60)} min ago` : `${Math.floor(ageSec / 3600)} hr ago`;
+        return `Last message: ${rel}`;
+      })()
+    : 'No messages received yet';
+
+  const tooltip = [statusLabel, lastMsgLabel, sp.error ? `Error: ${sp.error}` : ''].filter(Boolean).join(' · ');
+
   return (
     <span
-      title={label + (sp.error ? ` — ${sp.error}` : '')}
+      title={tooltip}
       className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-lg border transition-colors ${
         health === 'green'
           ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'

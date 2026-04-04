@@ -484,7 +484,7 @@ function SurePathPanel() {
   });
 
   const reconnectMutation = useMutation({
-    mutationFn: async () => { const r = await fetch('/api/waterskiconnect/surepath/connect', { method: 'POST' }); return r.json(); },
+    mutationFn: async () => { const r = await fetch('/api/surepath/reconnect', { method: 'POST' }); return r.json(); },
     onSuccess: () => { toast({ title: 'Reconnecting to WaterskiConnect…' }); refetchStatus(); },
   });
 
@@ -574,22 +574,20 @@ function SurePathPanel() {
 
         <div className="flex flex-wrap gap-3">
           <Button variant="primary" isLoading={saveMutation.isPending} onClick={save}>Save Settings</Button>
-          {enabled && (
-            <>
-              <Button
-                variant={health !== 'green' ? 'primary' : 'outline'}
-                isLoading={reconnectMutation.isPending}
-                onClick={() => reconnectMutation.mutate()}
-                className={health !== 'green' ? 'flex items-center gap-2' : 'flex items-center gap-2'}
-              >
-                <RefreshCw className="w-4 h-4" /> Reconnect
-              </Button>
-              {isConnected && (
-                <Button variant="outline" isLoading={disconnectMutation.isPending} onClick={() => disconnectMutation.mutate()} className="text-destructive hover:bg-destructive/10">
-                  Disconnect
-                </Button>
-              )}
-            </>
+          {enabled && health !== 'green' && (
+            <Button
+              variant="primary"
+              isLoading={reconnectMutation.isPending}
+              onClick={() => reconnectMutation.mutate()}
+              className="flex items-center gap-2"
+            >
+              <RefreshCw className="w-4 h-4" /> Reconnect
+            </Button>
+          )}
+          {enabled && isConnected && (
+            <Button variant="outline" isLoading={disconnectMutation.isPending} onClick={() => disconnectMutation.mutate()} className="text-destructive hover:bg-destructive/10">
+              Disconnect
+            </Button>
           )}
         </div>
 
