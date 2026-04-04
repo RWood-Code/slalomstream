@@ -565,9 +565,9 @@ router.post("/push-to-dropbox", async (req, res) => {
       }
     }
 
-    // 4. Convert viewer URL → direct-download URL (?dl=0 → ?dl=1)
-    const downloadUrl = sharedUrl.includes("?dl=")
-      ? sharedUrl.replace("?dl=0", "?dl=1")
+    // 4. Convert viewer URL → direct-download URL (?dl=0 or &dl=0 → dl=1)
+    const downloadUrl = /[?&]dl=\d/.test(sharedUrl)
+      ? sharedUrl.replace(/([?&])dl=\d/, "$1dl=1")
       : sharedUrl + (sharedUrl.includes("?") ? "&dl=1" : "?dl=1");
 
     // 5. Persist in app settings so venues can Fetch Update with one click
