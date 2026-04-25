@@ -51,3 +51,9 @@ Thumbs.db
 # Installer build artifacts
 installer/stage/
 SlalomStream-Setup.exe
+
+# Environment / secrets — never commit these
+.env
+.env.local
+.env.*.local
+*.env
