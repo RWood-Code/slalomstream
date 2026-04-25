@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.cache/
+.local/
+pnpm-lock.yaml
+*.tsbuildinfo
+lib/api-client-react/src/generated/
+lib/api-zod/src/generated/
+installer/stage/

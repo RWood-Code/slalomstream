@@ -4,6 +4,46 @@
 
 pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
 
+## GitHub Repository
+
+- **Repo**: `https://github.com/<org>/slalomstream` (private)
+  > **Action required**: Replace this placeholder with the real repo URL after the
+  > private repository is created on GitHub. Also update `version.json`'s
+  > `github_repo` field with the same URL.
+- **Default branch**: `main` (protected — direct pushes require a PR + CI pass)
+- **Distribution**: Tauri desktop releases are distributed via **GitHub Releases**, not Azure or any web host.
+
+### Setting up the repository (one-time)
+
+1. Create a private repo named `slalomstream` on GitHub.
+2. Push this monorepo: `git remote add origin <url> && git push -u origin main`
+3. Enable branch protection on `main`: require 1 PR review + CI pass before merge.
+4. Add the secrets listed in `docs/deployment-secrets.md` to GitHub Secrets.
+
+### Branching conventions
+
+| Branch      | Purpose |
+|-------------|---------|
+| `main`      | Always releasable. All merges via PR. |
+| `feature/*` | New features. |
+| `fix/*`     | Bug fixes. |
+
+### CI checks (`.github/workflows/ci.yml`)
+
+Runs on every push and PR:
+- **Prettier format check** (`pnpm run lint`) — enforces consistent code style
+- **TypeScript typecheck** (`pnpm run typecheck`) — full project-reference build
+
+### Release tagging
+
+Pushing a `v*` tag (e.g. `v1.8.0`) to `main` triggers the Tauri GitHub Actions
+build workflow (added in the Tauri migration task) which builds, signs, and
+publishes a GitHub Release. The Tauri auto-updater in existing installs detects
+the new release automatically.
+
+See `RELEASES.md` for the full versioning guide and hotfix process.
+See `docs/deployment-secrets.md` for the GitHub Secrets required by the build workflow.
+
 ## Artifacts
 
 ### SlalomStream (`artifacts/slalom-stream`)

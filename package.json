@@ -7,6 +7,7 @@
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
+    "lint": "prettier --check .",
     "start": "SERVE_STATIC=true STATIC_DIR=artifacts/slalom-stream/dist/public node artifacts/api-server/dist/index.cjs"
   },
   "private": true,
