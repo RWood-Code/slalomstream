@@ -42,7 +42,7 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
-          key: ${{ matrix.target || 'default' }}
+          key: ${{ matrix.target || 'default' }}-${{ hashFiles('src-tauri/Cargo.toml') }}
 
       - name: Install pnpm
         uses: pnpm/action-setup@v3
@@ -196,6 +196,16 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
 
+
+      - name: Show Tauri build error detail
+        if: failure()
+        shell: bash
+        run: |
+          if [ -f /tmp/tauri-build-error.txt ]; then
+            echo '=== Tauri build error ==='; cat /tmp/tauri-build-error.txt
+          else
+            echo 'No error detail file found.'
+          fi
       - name: Remove temporary build keychain
         if: runner.os == 'macOS' && always()
         shell: bash
