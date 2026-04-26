@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Camera access: required for video recording of slalom runs -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
+
+    <!-- Microphone access: required to capture audio alongside video recordings -->
+    <key>com.apple.security.device.microphone</key>
+    <true/>
+
+    <!-- Required by WKWebView (Tauri's renderer) to run JIT-compiled JavaScript under the hardened runtime -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- Required alongside allow-jit for WebKit's JavaScript engine to function under the hardened runtime -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- Required to load bundled binaries (ffmpeg, api-server) that are not signed by Apple under the hardened runtime -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- Required for outbound network connections: API calls, update checks, Cloudflare tunnel -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- Required for the embedded API server that listens on a local port -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+</dict>
+</plist>
