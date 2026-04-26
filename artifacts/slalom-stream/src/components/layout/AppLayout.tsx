@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils';
 import { Trophy, Video, FileCheck, Activity, Settings, LogOut, Waves, HelpCircle, Users } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
 import { useGetTournament } from '@workspace/api-client-react';
+import { TunnelStatusIndicator } from '@/components/TunnelStatusIndicator';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
@@ -30,13 +31,14 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       {/* Desktop Sidebar */}
       <aside className="fixed inset-y-0 left-0 hidden md:flex w-64 flex-col bg-card border-r shadow-xl shadow-black/5 z-40">
         <div className="p-6 flex items-center gap-3 border-b">
-          <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center">
+          <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center shrink-0">
             <Waves className="w-6 h-6 text-primary" />
           </div>
-          <div>
+          <div className="flex-1 min-w-0">
             <h1 className="font-display font-bold text-xl tracking-tight text-primary">SlalomStream</h1>
             <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">Pro Scoring</p>
           </div>
+          <TunnelStatusIndicator />
         </div>
         
         {tournament && (
@@ -91,11 +93,14 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             <Waves className="w-6 h-6 text-primary" />
             <h1 className="font-display font-bold text-xl tracking-tight text-foreground">SlalomStream</h1>
           </div>
-          {tournament && (
-            <div className="bg-primary/10 text-primary px-3 py-1 rounded-full text-xs font-bold max-w-[150px] truncate">
-              {tournament.name}
-            </div>
-          )}
+          <div className="flex items-center gap-2">
+            <TunnelStatusIndicator />
+            {tournament && (
+              <div className="bg-primary/10 text-primary px-3 py-1 rounded-full text-xs font-bold max-w-[120px] truncate">
+                {tournament.name}
+              </div>
+            )}
+          </div>
         </header>
         
         {children}
