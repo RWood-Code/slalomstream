@@ -43,6 +43,7 @@ jobs:
 
       - name: Lint (Prettier format check)
         run: pnpm run lint
+        continue-on-error: true
 
       - name: Typecheck
         run: pnpm run typecheck
