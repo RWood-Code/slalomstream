@@ -14,6 +14,13 @@ import Help from "@/pages/Help";
 import Officials from "@/pages/Officials";
 import Live from "@/pages/Live";
 import NotFound from "@/pages/not-found";
+import { setAdminTokenProvider } from "@workspace/api-client-react";
+import { useAppStore } from "@/lib/store";
+
+// Register admin token injection for write requests (used by requireAdminIfPublic
+// middleware when the Cloudflare tunnel is active). The token is read from the
+// Zustand store on each request — no re-registration needed on token change.
+setAdminTokenProvider(() => useAppStore.getState().adminToken);
 
 const queryClient = new QueryClient({
   defaultOptions: {

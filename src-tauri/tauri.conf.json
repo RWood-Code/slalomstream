@@ -44,7 +44,8 @@
     },
     "externalBin": [
       "binaries/api-server",
-      "binaries/ffmpeg"
+      "binaries/ffmpeg",
+      "binaries/cloudflared"
     ],
     "windows": {
       "certificateThumbprint": null,

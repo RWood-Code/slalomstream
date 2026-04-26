@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useAppStore } from '@/lib/store';
+import { authedFetch } from '@/lib/authed-fetch';
 import {
   useGetTournament, useListSkiers, useListPasses,
   useCreatePass, useUpdatePass, useCreateSkier,
@@ -1765,7 +1766,8 @@ function JudgeConnectPanel({ tournament }: { tournament: any }) {
     ...(judgeCount > 1 ? [{ role: 'chief_judge', label: 'Chief Judge' }] : []),
   ];
 
-  const isCloud = appSettings?.connection_mode === 'cloud' && !!appSettings?.public_url;
+  const isTunnel = appSettings?.connection_mode === 'tunnel' && !!appSettings?.public_url;
+  const isCloud = isTunnel || (appSettings?.connection_mode === 'cloud' && !!appSettings?.public_url);
 
   const getBase = () => {
     if (isCloud) return (appSettings!.public_url as string).replace(/\/$/, '');
@@ -1822,7 +1824,13 @@ function JudgeConnectPanel({ tournament }: { tournament: any }) {
               );
             })}
           </div>
-          {isCloud ? (
+          {isTunnel ? (
+            <p className="text-xs text-muted-foreground bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-lg p-3">
+              <strong className="text-green-700 dark:text-green-400">Tunnel active:</strong> Judges and spectators can connect from any network — mobile data or any WiFi.
+              All QR codes point to <code className="font-mono text-xs">{appSettings?.public_url}</code>.
+              Turn off "Go Online" in Settings to return to local-only mode.
+            </p>
+          ) : isCloud ? (
             <p className="text-xs text-muted-foreground bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
               <strong>Cloud mode:</strong> Judges can scan from any network — mobile data or any WiFi.
               All QR codes point to <code className="font-mono text-xs">{appSettings?.public_url}</code>.
@@ -1831,6 +1839,7 @@ function JudgeConnectPanel({ tournament }: { tournament: any }) {
             <p className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3">
               <strong>Local WiFi mode:</strong> All judge devices must connect to the same WiFi network as this server.
               QR codes point to <code className="font-mono text-xs">{network.urls[0]}</code>.
+              To share publicly, enable "Go Online" in Settings.
             </p>
           ) : null}
         </div>
@@ -2644,7 +2653,7 @@ function FlagButtons({ passId }: { passId: number }) {
 
   const addFlag = async (flag: string) => {
     try {
-      const res = await fetch(`/api/passes/${passId}/flag`, {
+      const res = await authedFetch(`/api/passes/${passId}/flag`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ flag }),

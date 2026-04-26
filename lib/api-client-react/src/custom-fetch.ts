@@ -2,6 +2,18 @@ export type CustomFetchOptions = RequestInit & {
   responseType?: "json" | "text" | "blob" | "auto";
 };
 
+// ─── Admin token injection ─────────────────────────────────────────────────────
+// A module-level token provider so the custom fetcher can attach X-Admin-Token
+// on write requests without importing the Zustand store (avoids circular deps).
+// Call setAdminTokenProvider() once at app startup with a getter for the token.
+
+let _adminTokenProvider: (() => string | null) | null = null;
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+export function setAdminTokenProvider(getter: () => string | null): void {
+  _adminTokenProvider = getter;
+}
+
 export type ErrorType<T = unknown> = ApiError<T>;
 
 export type BodyType<T> = T;
@@ -295,6 +307,14 @@ export async function customFetch<T = unknown>(
 
   if (responseType === "json" && !headers.has("accept")) {
     headers.set("accept", DEFAULT_JSON_ACCEPT);
+  }
+
+  // Inject admin token for write requests so the server can enforce write-route
+  // protection when the Cloudflare tunnel is active (requireAdminIfPublic middleware).
+  // The middleware is a no-op when the tunnel is inactive, so the header is harmless.
+  if (WRITE_METHODS.has(method) && _adminTokenProvider && !headers.has("x-admin-token")) {
+    const token = _adminTokenProvider();
+    if (token) headers.set("x-admin-token", token);
   }
 
   const requestInfo = { method, url: resolveUrl(input) };

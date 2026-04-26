@@ -7,11 +7,14 @@ import {
   Trash2, Key, Waves, Plug, PlugZap, Download, Globe, AlertCircle,
   ChevronDown, ChevronUp, Eye, EyeOff, Wand2, ShieldCheck, Wifi,
   Archive, RotateCcw, Pencil, ExternalLink, ClipboardPaste, ArrowRight, ListChecks,
-  Monitor, PowerOff, Server,
+  Monitor, PowerOff, Server, WifiOff, Loader2,
 } from 'lucide-react';
 import { useQueryClient, useQuery, useMutation } from '@tanstack/react-query';
 import { DIVISIONS, JUDGE_ROLES } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
+import { QRCodeSVG } from 'qrcode.react';
+import { isTauri, tauriInvoke, tauriListen } from '@/lib/tauri';
+import { authedFetch } from '@/lib/authed-fetch';
 
 // ─── Reusable collapsible section ─────────────────────────────────────────────
 function AdminSection({
@@ -141,7 +144,7 @@ export default function Admin() {
       {/* Global settings */}
       <div className="space-y-2">
         <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground px-1 pt-2">System Settings</p>
-        <ConnectionModePanel />
+        <GoOnlinePanel />
         <AppSettingsPanel />
         <SurePathPanel />
         <OfficialsPinsPanel />
@@ -168,8 +171,8 @@ export default function Admin() {
   );
 }
 
-// ─── Connection Mode ───────────────────────────────────────────────────────────
-function ConnectionModePanel() {
+// ─── Go Online / Cloudflare Tunnel ────────────────────────────────────────────
+function GoOnlinePanel() {
   const { toast } = useToast();
 
   const { data: settings, refetch } = useQuery({
@@ -183,73 +186,169 @@ function ConnectionModePanel() {
     staleTime: 15000,
   });
 
-  const [mode, setMode] = useState<'local' | 'cloud'>('local');
-  const [publicUrl, setPublicUrl] = useState('');
+  const isTunnelMode = settings?.connection_mode === 'tunnel';
+  const [tunnelOn, setTunnelOn] = useState(false);
+  const [tunnelUrl, setTunnelUrl] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [hasInternet, setHasInternet] = useState<boolean | null>(null);
+  const [showToken, setShowToken] = useState(false);
+  const [tokenValue, setTokenValue] = useState('');
+  const unlistenRefs = useRef<Array<() => void>>([]);
 
+  // Sync toggle state and saved token from persisted settings on load
   useEffect(() => {
     if (settings) {
-      setMode(settings.connection_mode ?? 'local');
-      setPublicUrl(settings.public_url ?? '');
+      const active = settings.connection_mode === 'tunnel';
+      setTunnelOn(active);
+      setTunnelUrl(active ? (settings.public_url ?? null) : null);
+      // Restore the named token if one was previously saved
+      if (settings.cloudflare_tunnel_token) {
+        setTokenValue(settings.cloudflare_tunnel_token);
+      }
     }
   }, [settings]);
 
-  const saveMutation = useMutation({
-    mutationFn: async (body: Record<string, unknown>) => {
-      const res = await fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      return res.json();
-    },
-    onSuccess: () => { toast({ title: 'Connection mode saved' }); refetch(); },
-  });
+  // Check internet connectivity when component mounts
+  useEffect(() => {
+    if (!isTauri) { setHasInternet(null); return; }
+    tauriInvoke<boolean>('check_internet').then(setHasInternet).catch(() => setHasInternet(false));
+  }, []);
 
-  const save = (newMode: 'local' | 'cloud', url?: string) =>
-    saveMutation.mutate({ connection_mode: newMode, public_url: url ?? publicUrl ?? null });
+  // Subscribe to tunnel events from Rust
+  useEffect(() => {
+    if (!isTauri) return;
 
-  const badge = mode === 'cloud'
-    ? <Badge variant="success" className="text-xs flex items-center gap-1"><Globe className="w-2.5 h-2.5" /> Cloud</Badge>
-    : <Badge variant="outline" className="text-xs flex items-center gap-1"><Wifi className="w-2.5 h-2.5" /> Local WiFi</Badge>;
+    let active = true;
+
+    tauriListen<{ url: string }>('tunnel-url', async (payload) => {
+      if (!active) return;
+      const url = payload.url;
+      setTunnelUrl(url);
+      setTunnelOn(true);
+      setStarting(false);
+      // Persist to settings (authedFetch required: settings PUT is now protected)
+      await authedFetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connection_mode: 'tunnel', public_url: url }),
+      });
+      refetch();
+      toast({ title: 'Tunnel active', description: url });
+    }).then(unsub => { unlistenRefs.current.push(unsub); });
+
+    tauriListen<{ reconnecting?: boolean }>('tunnel-stopped', async (payload) => {
+      if (!active) return;
+      setTunnelUrl(null);
+      if (payload?.reconnecting) {
+        // Unexpected drop — clear persisted state so consumers see no URL,
+        // keep toggle on with spinner while Rust auto-reconnects (5s backoff)
+        setStarting(true);
+        setTunnelOn(true);
+        await authedFetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connection_mode: 'local', public_url: null }),
+        });
+        refetch();
+      } else {
+        setTunnelOn(false);
+        setStarting(false);
+        // Clear from settings only on user-initiated stop
+        await authedFetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connection_mode: 'local', public_url: null }),
+        });
+        refetch();
+      }
+    }).then(unsub => { unlistenRefs.current.push(unsub); });
+
+    return () => {
+      active = false;
+      unlistenRefs.current.forEach(unsub => unsub());
+      unlistenRefs.current = [];
+    };
+  }, []);
+
+  const handleToggle = async () => {
+    if (!isTauri) return;
+
+    if (tunnelOn) {
+      // Turn off
+      try {
+        await tauriInvoke('stop_tunnel');
+        setTunnelOn(false);
+        setTunnelUrl(null);
+        await authedFetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connection_mode: 'local', public_url: null }),
+        });
+        refetch();
+      } catch (e) {
+        toast({ title: 'Error stopping tunnel', description: String(e), variant: 'destructive' });
+      }
+    } else {
+      // Turn on — verify an admin PIN exists (required for secure public access)
+      const latestSettings = await fetch('/api/settings').then(r => r.json()).catch(() => null);
+      const hasAdminPin = !!(latestSettings?.has_admin_pin ?? latestSettings?.admin_pin);
+      if (!hasAdminPin) {
+        toast({
+          title: 'Admin PIN required before going online',
+          description: 'Set an Admin PIN in the Security section first. Without it, anyone with the public URL could gain admin access.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      // Re-check internet first
+      setStarting(true);
+      try {
+        const online = await tauriInvoke<boolean>('check_internet');
+        setHasInternet(online);
+        if (!online) {
+          setStarting(false);
+          toast({ title: 'No internet connection', description: 'Connect to the internet before going online.', variant: 'destructive' });
+          return;
+        }
+        await tauriInvoke('start_tunnel', { token: tokenValue.trim() || null });
+        // URL will arrive via tunnel-url event
+      } catch (e) {
+        setStarting(false);
+        toast({ title: 'Error starting tunnel', description: String(e), variant: 'destructive' });
+      }
+    }
+  };
+
+  const saveToken = async (value: string) => {
+    await authedFetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cloudflare_tunnel_token: value.trim() || null }),
+    });
+  };
+
+  const tunnelActive = tunnelOn && !!tunnelUrl;
+
+  const badge = tunnelActive
+    ? <Badge variant="success" className="text-xs flex items-center gap-1"><Globe className="w-2.5 h-2.5" /> Online</Badge>
+    : isTunnelMode
+      ? <Badge variant="outline" className="text-xs flex items-center gap-1"><Loader2 className="w-2.5 h-2.5 animate-spin" /> Connecting…</Badge>
+      : <Badge variant="outline" className="text-xs flex items-center gap-1"><Wifi className="w-2.5 h-2.5" /> Local WiFi</Badge>;
 
   return (
     <AdminSection
-      icon={<Wifi className="w-4 h-4" />}
-      title="Connection Mode"
-      subtitle="How judge devices connect to this server"
+      icon={<Globe className="w-4 h-4" />}
+      title="Network"
+      subtitle="Local connections and public online access"
       badge={badge}
     >
       <div className="p-5 space-y-4">
-        {/* Mode picker */}
-        <div className="grid sm:grid-cols-2 gap-3">
-          <button
-            onClick={() => { setMode('local'); save('local'); }}
-            className={`p-4 rounded-xl border-2 text-left transition-all ${mode === 'local' ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/40'}`}
-          >
-            <div className="flex items-center gap-2 mb-1.5">
-              <Wifi className="w-4 h-4 text-primary" />
-              <p className="font-bold text-sm">Local WiFi</p>
-              {mode === 'local' && <CheckCircle2 className="w-4 h-4 text-primary ml-auto" />}
-            </div>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              Server runs on a laptop at the venue. All judge devices must join the same WiFi network. No internet required — works anywhere.
-            </p>
-          </button>
-          <button
-            onClick={() => setMode('cloud')}
-            className={`p-4 rounded-xl border-2 text-left transition-all ${mode === 'cloud' ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/40'}`}
-          >
-            <div className="flex items-center gap-2 mb-1.5">
-              <Globe className="w-4 h-4 text-primary" />
-              <p className="font-bold text-sm">Cloud / Online</p>
-              {mode === 'cloud' && <CheckCircle2 className="w-4 h-4 text-primary ml-auto" />}
-            </div>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              Server is deployed to the internet. Judges can connect from <strong>any network</strong> — mobile data, hotel WiFi, etc. Requires internet on every device.
-            </p>
-          </button>
-        </div>
 
-        {/* Local: show detected IPs */}
-        {mode === 'local' && network?.urls?.length > 0 && (
+        {/* Local WiFi addresses — always visible */}
+        {network?.urls?.length > 0 && (
           <div className="p-3 bg-muted/50 rounded-xl border space-y-2">
-            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Detected Local Addresses</p>
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Local WiFi Addresses</p>
             {network.urls.map((url: string, i: number) => (
               <div key={i} className="flex items-center gap-2">
                 <code className="flex-1 text-xs font-mono bg-background px-2 py-1 rounded border">{url}</code>
@@ -261,33 +360,126 @@ function ConnectionModePanel() {
                 </button>
               </div>
             ))}
-            <p className="text-xs text-muted-foreground">QR codes on the Recording page point to this address. All devices must be on the same WiFi.</p>
+            <p className="text-xs text-muted-foreground">Judges connect to this address when on the same WiFi network as this laptop.</p>
           </div>
         )}
 
-        {/* Cloud: public URL field */}
-        {mode === 'cloud' && (
+        {/* Go Online toggle — desktop app only */}
+        {isTauri ? (
           <div className="space-y-3">
-            <div className="flex gap-3 items-end">
-              <Input
-                label="Public URL"
-                placeholder="https://your-app.replit.app"
-                value={publicUrl}
-                onChange={e => setPublicUrl(e.target.value)}
-                className="h-10 font-mono text-xs"
-              />
-              <Button
-                variant="primary"
-                className="h-10 px-5 shrink-0"
-                isLoading={saveMutation.isPending}
-                onClick={() => save('cloud')}
+            <div className="flex items-center justify-between p-4 rounded-xl border-2 border-border bg-card">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <Globe className="w-4 h-4 text-primary" />
+                  <p className="font-bold text-sm">Go Online</p>
+                  {hasInternet === false && !tunnelOn && (
+                    <div className="flex items-center gap-1 text-amber-600 text-xs">
+                      <WifiOff className="w-3 h-3" />
+                      No internet
+                    </div>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {tunnelActive
+                    ? 'Spectators and judges on any network can access the system via the public URL below.'
+                    : 'Start a secure Cloudflare tunnel so spectators can see results online and judges can connect from any network.'}
+                </p>
+              </div>
+              <button
+                onClick={handleToggle}
+                disabled={starting || (!tunnelOn && hasInternet === false)}
+                className={`relative w-12 h-6 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary flex-shrink-0 ml-4 ${
+                  tunnelOn ? 'bg-primary' : 'bg-muted-foreground/30'
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
+                aria-label={tunnelOn ? 'Turn off tunnel' : 'Turn on tunnel'}
               >
-                Save
-              </Button>
+                <span className={`block w-5 h-5 bg-white rounded-full shadow transition-transform absolute top-0.5 ${
+                  tunnelOn ? 'translate-x-6' : 'translate-x-0.5'
+                }`} />
+              </button>
             </div>
-            <p className="text-xs text-muted-foreground bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 rounded-lg p-3">
-              Enter the full public URL where this app is deployed (e.g. your Replit deployment URL).
-              QR codes on the Recording page will use this address so judges can connect from any network without needing to be on the same WiFi.
+
+            {/* Starting indicator */}
+            {starting && (
+              <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300">
+                <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+                <div>
+                  <p className="text-xs font-bold">Starting Cloudflare tunnel…</p>
+                  <p className="text-xs opacity-80">This usually takes 5–15 seconds.</p>
+                </div>
+              </div>
+            )}
+
+            {/* Active tunnel info */}
+            {tunnelActive && tunnelUrl && (
+              <div className="p-4 rounded-xl border-2 border-primary/30 bg-primary/5 space-y-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                  <p className="text-xs font-bold text-primary uppercase tracking-wider">Tunnel Active</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 text-xs font-mono bg-background px-2 py-1.5 rounded border break-all">{tunnelUrl}</code>
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(tunnelUrl); toast({ title: 'URL copied' }); }}
+                    className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                  </button>
+                  <a href={tunnelUrl} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0">
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                </div>
+                <div className="flex gap-4 items-start">
+                  <div className="p-2 bg-white rounded-xl border shadow-sm">
+                    <QRCodeSVG value={tunnelUrl} size={90} level="M" fgColor="#064e3b" bgColor="#ffffff" />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      Share this URL or QR code with spectators. Judges can also scan it from any network — mobile data, hotel WiFi, etc.
+                    </p>
+                    <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-2 mt-2">
+                      Write operations (adding skiers, scores, etc.) require admin authentication while the tunnel is active.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Named tunnel token — expandable */}
+            <div className="border rounded-xl overflow-hidden">
+              <button
+                onClick={() => setShowToken(v => !v)}
+                className="w-full flex items-center justify-between px-4 py-2.5 text-left hover:bg-muted/40 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Key className="w-3.5 h-3.5 text-muted-foreground" />
+                  <p className="text-xs font-medium text-muted-foreground">Advanced: Named tunnel token</p>
+                </div>
+                {showToken ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />}
+              </button>
+              {showToken && (
+                <div className="px-4 pb-4 pt-2 space-y-2 border-t bg-muted/20">
+                  <Input
+                    label="Cloudflare Tunnel Token (optional)"
+                    placeholder="Leave blank for a quick random URL"
+                    value={tokenValue}
+                    onChange={e => setTokenValue(e.target.value)}
+                    onBlur={e => saveToken(e.target.value)}
+                    className="h-9 font-mono text-xs"
+                  />
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Provide a Cloudflare Tunnel token (from the Cloudflare dashboard) to get the same named URL every tournament.
+                    Leave blank to use a free quick tunnel with a random <code className="font-mono">*.trycloudflare.com</code> URL — no account required.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="p-3 rounded-xl border bg-muted/30 text-center">
+            <Globe className="w-5 h-5 text-muted-foreground mx-auto mb-1.5" />
+            <p className="text-xs text-muted-foreground">
+              The "Go Online" feature is available in the desktop app. Install SlalomStream to share a public URL with spectators and enable online judging.
             </p>
           </div>
         )}
@@ -323,7 +515,7 @@ function AppSettingsPanel() {
 
   const saveMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
-      const res = await fetch('/api/settings', {
+      const res = await authedFetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -495,7 +687,7 @@ function SurePathPanel() {
 
   const saveMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
-      const r = await fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const r = await authedFetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       return r.json();
     },
     onSuccess: () => { toast({ title: 'SurePath settings saved' }); refetch(); refetchStatus(); },
@@ -1271,7 +1463,7 @@ function CsvImportPanel({ tournamentId }: { tournamentId: number }) {
       .filter((_, i) => selected.has(i))
       .map(r => ({ first_name: r.first_name, surname: r.surname, division: r.division || undefined, club: r.club || undefined, pin: r.pin || undefined }));
     try {
-      const res = await fetch(`/api/tournaments/${tournamentId}/skiers/bulk`, {
+      const res = await authedFetch(`/api/tournaments/${tournamentId}/skiers/bulk`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ skiers: toImport }),
@@ -1502,7 +1694,7 @@ function TournamentArchive() {
 
   const archiveMutation = useMutation({
     mutationFn: async ({ id, status }: { id: number; status: string }) => {
-      const res = await fetch(`/api/tournaments/${id}`, {
+      const res = await authedFetch(`/api/tournaments/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status }),
@@ -1646,7 +1838,7 @@ function ScoreCorrections({ tournamentId }: { tournamentId: number }) {
   const saveBuoys = async (passId: number) => {
     const val = editingBuoys[passId];
     if (val === undefined || val === '') return;
-    const res = await fetch(`/api/passes/${passId}`, {
+    const res = await authedFetch(`/api/passes/${passId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ buoys_scored: parseFloat(val), status: 'complete' }),

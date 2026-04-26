@@ -1,9 +1,14 @@
 import { Router } from "express";
 import { randomUUID } from "crypto";
+import fs from "fs";
+import os from "os";
+import path from "path";
 import { db } from "@workspace/db";
 import { appSettingsTable, officialsRegisterTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { startSurePathClient, stopSurePathClient } from "../services/surepath-client";
+
+const TUNNEL_FLAG = path.join(os.tmpdir(), "slalomstream-tunnel-active");
 
 // In-memory admin session tokens: token → expiry timestamp
 export const adminSessions = new Map<string, number>();
@@ -49,7 +54,11 @@ async function getOrCreateSettings() {
 
 router.get("/", async (_req, res) => {
   const settings = await getOrCreateSettings();
-  res.json(settings);
+  // Never expose sensitive credentials over the network — the PIN is a write-auth secret,
+  // returning it would allow any public client to read it and mint an admin token.
+  // The frontend only needs to know whether a PIN exists, not its value.
+  const { admin_pin, ...safe } = settings;
+  res.json({ ...safe, has_admin_pin: admin_pin !== null && admin_pin !== "" });
 });
 
 router.put("/", async (req, res) => {
@@ -71,9 +80,10 @@ router.put("/", async (req, res) => {
   if ("surepath_event_sub_id"   in body) patch.surepath_event_sub_id    = (body.surepath_event_sub_id as string | null) ?? null;
   if ("surepath_observer_pin"   in body) patch.surepath_observer_pin    = (body.surepath_observer_pin as string | null) ?? null;
   if ("active_tournament_id"    in body) patch.active_tournament_id     = (body.active_tournament_id as number | null) ?? null;
-  if ("connection_mode"         in body) patch.connection_mode          = (body.connection_mode as string) || "local";
-  if ("public_url"              in body) patch.public_url               = (body.public_url as string | null) ?? null;
-  if ("update_download_url"     in body) patch.update_download_url      = (body.update_download_url as string | null) ?? null;
+  if ("connection_mode"            in body) patch.connection_mode             = (body.connection_mode as string) || "local";
+  if ("public_url"                 in body) patch.public_url                  = (body.public_url as string | null) ?? null;
+  if ("cloudflare_tunnel_token"    in body) patch.cloudflare_tunnel_token     = (body.cloudflare_tunnel_token as string | null) ?? null;
+  if ("update_download_url"        in body) patch.update_download_url         = (body.update_download_url as string | null) ?? null;
 
   if (Object.keys(patch).length === 0) {
     const current = await getOrCreateSettings();
@@ -100,30 +110,30 @@ export const adminRouter = Router();
 adminRouter.post("/verify-pin", async (req, res) => {
   const { pin } = req.body;
   const settings = await getOrCreateSettings();
+  const tunnelIsActive = fs.existsSync(TUNNEL_FLAG);
 
-  // No admin PIN configured → open access
-  if (!settings.admin_pin) {
-    // Still allow if the pin matches an official admin PIN
-    const officialAdmin = await db
-      .select()
-      .from(officialsRegisterTable)
-      .where(and(eq(officialsRegisterTable.is_admin, true), eq(officialsRegisterTable.pin, String(pin))))
-      .limit(1);
-    const token = createAdminSession();
-    if (officialAdmin.length > 0) return res.json({ valid: true, token, admin_name: `${officialAdmin[0].first_name} ${officialAdmin[0].surname}` });
-    return res.json({ valid: true, token });
-  }
-
-  // Check global admin PIN
-  if (settings.admin_pin === String(pin)) return res.json({ valid: true, token: createAdminSession() });
-
-  // Check official admin PINs
+  // Always check official admin PINs first (works with or without a global PIN)
   const officialAdmin = await db
     .select()
     .from(officialsRegisterTable)
     .where(and(eq(officialsRegisterTable.is_admin, true), eq(officialsRegisterTable.pin, String(pin))))
     .limit(1);
-  if (officialAdmin.length > 0) return res.json({ valid: true, token: createAdminSession(), admin_name: `${officialAdmin[0].first_name} ${officialAdmin[0].surname}` });
+  if (officialAdmin.length > 0) {
+    return res.json({ valid: true, token: createAdminSession(), admin_name: `${officialAdmin[0].first_name} ${officialAdmin[0].surname}` });
+  }
+
+  // Check global admin PIN
+  if (settings.admin_pin && settings.admin_pin === String(pin)) {
+    return res.json({ valid: true, token: createAdminSession() });
+  }
+
+  // No admin PIN configured and no official admin matched:
+  // - Local-only mode: allow open access (no public exposure risk)
+  // - Tunnel active: REFUSE — issuing tokens without PIN validation would let
+  //   any public client escalate to admin while the app is publicly reachable.
+  if (!settings.admin_pin && !tunnelIsActive) {
+    return res.json({ valid: true, token: createAdminSession() });
+  }
 
   res.status(401).json({ valid: false });
 });

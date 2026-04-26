@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAppStore } from '@/lib/store';
+import { authedFetch } from '@/lib/authed-fetch';
 import {
   useGetTournament, useListPasses, useListSkiers,
   useSubmitJudgeScore, useVerifyJudgePin, useCreatePass, useUpdatePass
@@ -134,7 +135,7 @@ function ActivePassControls({ pass, tournamentId }: { pass: any; tournamentId: n
   const handleUpdate = async () => {
     setSaving(true);
     try {
-      await fetch(`/api/passes/${pass.id}`, {
+      await authedFetch(`/api/passes/${pass.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rope_length: Number(rope), speed_kph: Number(speed) }),

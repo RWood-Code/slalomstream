@@ -1,1 +1,2 @@
 installer/stage/node.exe filter=lfs diff=lfs merge=lfs -text
+cloudflared-x86_64-pc-windows-msvc.exe filter=lfs diff=lfs merge=lfs -text

@@ -7,6 +7,22 @@ use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+/// Path to the flag file that the middleware reads to know if the tunnel is active.
+/// Only the Rust process creates/deletes this file — it cannot be manipulated via
+/// any HTTP endpoint, so it acts as a trusted local signal.
+fn tunnel_flag_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("slalomstream-tunnel-active")
+}
+
+fn set_tunnel_flag(active: bool) {
+    let path = tunnel_flag_path();
+    if active {
+        let _ = std::fs::write(&path, b"");
+    } else {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
 // ─── API Server sidecar state ─────────────────────────────────────────────────
 
 struct SidecarState {
@@ -53,6 +69,24 @@ impl FfmpegPreviewState {
         Self {
             child: Mutex::new(None),
             stop_flag: Mutex::new(None),
+        }
+    }
+}
+
+// ─── Cloudflare Tunnel state ─────────────────────────────────────────────────
+
+struct TunnelState {
+    child: Mutex<Option<CommandChild>>,
+    active_url: Mutex<Option<String>>,
+    shutting_down: AtomicBool,
+}
+
+impl TunnelState {
+    fn new() -> Self {
+        Self {
+            child: Mutex::new(None),
+            active_url: Mutex::new(None),
+            shutting_down: AtomicBool::new(false),
         }
     }
 }
@@ -896,6 +930,201 @@ async fn trim_video(
     }
 }
 
+// ─── Internet connectivity check ─────────────────────────────────────────────
+
+#[tauri::command]
+fn check_internet() -> bool {
+    use std::net::TcpStream;
+    TcpStream::connect_timeout(
+        &"1.1.1.1:443".parse().expect("Invalid address"),
+        Duration::from_secs(3),
+    )
+    .is_ok()
+}
+
+// ─── Cloudflare Tunnel management ─────────────────────────────────────────────
+
+/// Extract the first HTTPS URL from a cloudflared log line.
+fn extract_url_from_line(line: &str) -> Option<String> {
+    let idx = line.find("https://")?;
+    let rest = &line[idx..];
+    let end = rest
+        .find(|c: char| c.is_whitespace() || c == '|' || c == '\r' || c == '\n')
+        .unwrap_or(rest.len());
+    let url = rest[..end].trim_end_matches(|c: char| !c.is_alphanumeric() && c != '/');
+    if url.len() > 12 && url.contains('.') {
+        Some(url.to_string())
+    } else {
+        None
+    }
+}
+
+/// Spawn cloudflared and monitor its output. On unexpected exit, waits 5s and
+/// re-spawns automatically (unless `state.shutting_down` is set).
+/// Returns Err if the initial spawn fails.
+async fn spawn_cloudflared(
+    app: AppHandle,
+    token: Option<String>,
+    state: Arc<TunnelState>,
+) -> Result<(), String> {
+    let mut cmd = app
+        .shell()
+        .sidecar("cloudflared")
+        .map_err(|e| format!("cloudflared sidecar not found: {e}"))?;
+
+    if let Some(ref t) = token {
+        cmd = cmd.args(["tunnel", "--no-autoupdate", "run", "--token", t.as_str()]);
+    } else {
+        cmd = cmd.args(["tunnel", "--no-autoupdate", "--url", "http://localhost:3000"]);
+    }
+
+    let (rx, child) = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to start cloudflared: {e}"))?;
+
+    {
+        let mut guard = state.child.lock().map_err(|e| e.to_string())?;
+        *guard = Some(child);
+    }
+
+    eprintln!("[Tunnel] cloudflared started");
+
+    let app_handle = app.clone();
+    let state_monitor = state.clone();
+    let token_for_retry = token.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let mut rx = rx;
+        while let Some(event) = rx.recv().await {
+            match event {
+                CommandEvent::Stdout(line) | CommandEvent::Stderr(line) => {
+                    let s = String::from_utf8_lossy(&line).to_string();
+                    eprintln!("[Tunnel] {}", s.trim_end());
+
+                    // Only emit the URL once
+                    let already_have_url = {
+                        let guard = state_monitor.active_url.lock().unwrap();
+                        guard.is_some()
+                    };
+                    if already_have_url {
+                        continue;
+                    }
+
+                    if let Some(url) = extract_url_from_line(&s) {
+                        eprintln!("[Tunnel] Assigned URL: {url}");
+                        {
+                            let mut guard = state_monitor.active_url.lock().unwrap();
+                            *guard = Some(url.clone());
+                        }
+                        // Mark tunnel as active — middleware reads this file
+                        set_tunnel_flag(true);
+                        // Notify the frontend — it will call PUT /api/settings
+                        app_handle
+                            .emit("tunnel-url", serde_json::json!({ "url": url }))
+                            .ok();
+                    }
+                }
+                CommandEvent::Terminated(payload) => {
+                    // Clear process handle, URL, and flag file
+                    {
+                        let mut guard = state_monitor.active_url.lock().unwrap();
+                        *guard = None;
+                    }
+                    {
+                        let mut guard = state_monitor.child.lock().unwrap();
+                        *guard = None;
+                    }
+                    set_tunnel_flag(false);
+
+                    if state_monitor.shutting_down.load(Ordering::SeqCst) {
+                        eprintln!("[Tunnel] cloudflared stopped (code: {:?})", payload.code);
+                    } else {
+                        eprintln!(
+                            "[Tunnel] cloudflared exited unexpectedly (code: {:?}). Reconnecting in 5s…",
+                            payload.code
+                        );
+                        // Notify frontend URL is gone (it shows a "reconnecting" state)
+                        app_handle
+                            .emit("tunnel-stopped", serde_json::json!({ "reconnecting": true }))
+                            .ok();
+
+                        // Reconnect after backoff unless shutdown was requested in the meantime
+                        let retry_handle = app_handle.clone();
+                        let retry_state = state_monitor.clone();
+                        let retry_token = token_for_retry.clone();
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            if retry_state.shutting_down.load(Ordering::SeqCst) {
+                                return;
+                            }
+                            // Guard against a race with another start_tunnel call
+                            {
+                                let guard = retry_state.child.lock().unwrap();
+                                if guard.is_some() {
+                                    return;
+                                }
+                            }
+                            eprintln!("[Tunnel] Attempting reconnect…");
+                            // Box::pin breaks the recursive async type so the
+                            // compiler can size the surrounding async block.
+                            if let Err(e) = Box::pin(spawn_cloudflared(retry_handle, retry_token, retry_state)).await {
+                                eprintln!("[Tunnel] Reconnect failed: {e}");
+                            }
+                        });
+                    }
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn start_tunnel(
+    app: AppHandle,
+    token: Option<String>,
+    state: tauri::State<'_, Arc<TunnelState>>,
+) -> Result<(), String> {
+    // Prevent double-start
+    {
+        let guard = state.child.lock().map_err(|e| e.to_string())?;
+        if guard.is_some() {
+            return Err("Tunnel already running".to_string());
+        }
+    }
+
+    state.shutting_down.store(false, Ordering::SeqCst);
+    spawn_cloudflared(app, token, state.inner().clone()).await
+}
+
+#[tauri::command]
+async fn stop_tunnel(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<TunnelState>>,
+) -> Result<(), String> {
+    state.shutting_down.store(true, Ordering::SeqCst);
+
+    {
+        let mut guard = state.child.lock().map_err(|e| e.to_string())?;
+        if let Some(child) = guard.take() {
+            child.kill().ok();
+            eprintln!("[Tunnel] cloudflared stopped by user");
+        }
+    }
+    {
+        let mut guard = state.active_url.lock().unwrap();
+        *guard = None;
+    }
+
+    // Frontend listens for this event and clears public_url in settings
+    app.emit("tunnel-stopped", serde_json::json!({})).ok();
+
+    Ok(())
+}
+
 // ─── App entry point ─────────────────────────────────────────────────────────
 
 pub fn run() {
@@ -907,7 +1136,11 @@ pub fn run() {
         .manage(Arc::new(SidecarState::new()))
         .manage(Arc::new(FfmpegState::new()))
         .manage(Arc::new(FfmpegPreviewState::new()))
+        .manage(Arc::new(TunnelState::new()))
         .setup(|app| {
+            // Clean up any stale tunnel flag from a previous crash
+            set_tunnel_flag(false);
+
             let handle = app.handle().clone();
             #[cfg(not(debug_assertions))]
             spawn_sidecar(&handle);
@@ -971,12 +1204,25 @@ pub fn run() {
             start_ffmpeg_preview,
             stop_ffmpeg_preview,
             trim_video,
+            check_internet,
+            start_tunnel,
+            stop_tunnel,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
             if let RunEvent::ExitRequested { .. } = event {
                 kill_sidecar(app);
+                // Stop tunnel if active and clear flag file
+                let tunnel = app.state::<Arc<TunnelState>>();
+                tunnel.shutting_down.store(true, Ordering::SeqCst);
+                if let Ok(mut guard) = tunnel.child.lock() {
+                    if let Some(child) = guard.take() {
+                        child.kill().ok();
+                        eprintln!("[Tunnel] cloudflared stopped (app exit)");
+                    }
+                }
+                set_tunnel_flag(false);
                 // Gracefully stop any in-progress FFmpeg recording
                 let ffmpeg = app.state::<Arc<FfmpegState>>();
                 if let Ok(mut guard) = ffmpeg.child.lock() {
