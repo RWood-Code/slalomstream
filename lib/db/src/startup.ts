@@ -62,7 +62,6 @@ const CREATE_TABLES: string[] = [
     active_tournament_id     integer,
     connection_mode          text NOT NULL DEFAULT 'local',
     public_url               text,
-    github_repo              text,
     update_download_url      text
   )`,
   `CREATE TABLE IF NOT EXISTS judges (
@@ -131,7 +130,6 @@ async function createTablesIfNotExist() {
 const COLUMN_PATCHES: string[] = [
   `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS connection_mode text NOT NULL DEFAULT 'local'`,
   `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS public_url text`,
-  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS github_repo text`,
   `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS update_download_url text`,
   `ALTER TABLE officials_register ADD COLUMN IF NOT EXISTS pin text`,
   `ALTER TABLE officials_register ADD COLUMN IF NOT EXISTS judge_role text`,

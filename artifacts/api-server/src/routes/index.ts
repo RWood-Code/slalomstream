@@ -11,7 +11,6 @@ import waterskiconnectRouter from "./waterskiconnect";
 import surePathRouter from "./surepath";
 import officialsRouter from "./officials";
 import emsRouter from "./ems";
-import updateRouter from "./update";
 import systemRouter from "./system";
 
 const router = Router();
@@ -33,7 +32,6 @@ router.use("/settings", settingsRouter);
 router.use("/admin", adminRouter);
 router.use("/officials", officialsRouter);
 router.use("/ems", emsRouter);
-router.use("/update", updateRouter);
 router.use("/system", systemRouter);
 
 export default router;

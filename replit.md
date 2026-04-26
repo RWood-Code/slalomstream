@@ -6,16 +6,20 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 
 ## GitHub Repository
 
-- **Repo**: `https://github.com/<org>/slalomstream` (private)
-  > **Action required**: Replace this placeholder with the real repo URL after the
-  > private repository is created on GitHub. Also update `version.json`'s
-  > `github_repo` field with the same URL.
+- **Repo**: `https://github.com/nztwsa/slalomstream`
+  > **Action required**: Replace the placeholder in `src-tauri/tauri.conf.json` →
+  > `plugins.updater.endpoints` with the real GitHub org/repo once created.
 - **Default branch**: `main` (protected — direct pushes require a PR + CI pass)
-- **Distribution**: Tauri desktop releases are distributed via **GitHub Releases**, not Azure or any web host.
+- **Distribution**: Tauri desktop releases are distributed via **public GitHub Releases**.
+  The source repository may be private, but the GitHub Release and its assets **must be
+  publicly accessible** so that the in-app auto-updater can download `update.json` and
+  the signed installers without authentication. GitHub allows public releases on private
+  repos via release visibility settings, or you can publish releases from a separate
+  public "releases" repository.
 
 ### Setting up the repository (one-time)
 
-1. Create a private repo named `slalomstream` on GitHub.
+1. Create the repo on GitHub (source may be private; releases must be public — see above).
 2. Push this monorepo: `git remote add origin <url> && git push -u origin main`
 3. Enable branch protection on `main`: require 1 PR review + CI pass before merge.
 4. Add the secrets listed in `docs/deployment-secrets.md` to GitHub Secrets.
@@ -34,15 +38,41 @@ Runs on every push and PR:
 - **Prettier format check** (`pnpm run lint`) — enforces consistent code style
 - **TypeScript typecheck** (`pnpm run typecheck`) — full project-reference build
 
-### Release tagging
+### Release workflow
 
-Pushing a `v*` tag (e.g. `v1.8.0`) to `main` triggers the Tauri GitHub Actions
-build workflow (added in the Tauri migration task) which builds, signs, and
-publishes a GitHub Release. The Tauri auto-updater in existing installs detects
-the new release automatically.
+1. Run `node scripts/bump-version.mjs <new-version>` to update `version.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` atomically.
+2. Commit: `git add version.json src-tauri/tauri.conf.json src-tauri/Cargo.toml && git commit -m "chore: bump version to v<new-version>"`
+3. Tag: `git tag v<new-version> && git push && git push --tags`
+4. GitHub Actions (`.github/workflows/tauri-build.yml`) triggers on the `v*` tag, builds Windows `.exe` + macOS `.dmg`, and publishes a GitHub Release.
+5. The Tauri auto-updater in existing installs detects the new release on next app launch and prompts the user to install.
+
+**Required GitHub Secrets**:
+- `TAURI_SIGNING_PRIVATE_KEY` — Tauri updater signing key (generate with `pnpm tauri signer generate -w ~/.tauri/slalomstream.key`)
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — password for the signing key
+
+After generating the key pair, store both halves as GitHub Secrets:
+- `TAURI_SIGNING_PRIVATE_KEY` — private key content (used by tauri-action to sign installers)
+- `TAURI_SIGNING_PUBLIC_KEY` — public key (one-line base64 string; injected into `tauri.conf.json` at build time by the workflow)
+
+The `plugins.updater.pubkey` field in `tauri.conf.json` is kept as `"PLACEHOLDER_REPLACE_ME"` in the repository. The `tauri-build.yml` workflow replaces it with the real key from `TAURI_SIGNING_PUBLIC_KEY` before building; the build fails fast if the secret is not set.
 
 See `RELEASES.md` for the full versioning guide and hotfix process.
-See `docs/deployment-secrets.md` for the GitHub Secrets required by the build workflow.
+
+### Tauri desktop development setup (local, not in Replit)
+
+Replit does not have Rust/WebView2 installed — Tauri dev/build must run on a local macOS or Windows machine.
+
+1. Install prerequisites: Rust stable, Node 20+, pnpm 9+, Tauri CLI v2 (`cargo install tauri-cli --version '^2'` or `pnpm install` at repo root to get `@tauri-apps/cli`)
+2. Run: `pnpm install` — installs all dependencies including `concurrently`
+3. Run: `pnpm tauri dev` — `beforeDevCommand` starts the api-server dev server and Vite concurrently; Tauri opens the native window at `http://localhost:5173`. No manual pre-build steps required.
+
+For a production build (local): `pnpm tauri build` — `beforeBuildCommand` automatically builds the api-server, packages the Node.js SEA sidecar binary, and builds the frontend before invoking Tauri.
+
+**Architecture in production builds**: The Tauri window loads `http://localhost:3000` (the Express sidecar). The sidecar is configured by Tauri to serve both the frontend static files (from the `static/` resource dir bundled into the app) and the `/api/*` REST routes. This keeps the frontend and API on the same origin, so all relative `fetch('/api/...')` calls work without modification.
+
+**Architecture in dev mode (`pnpm tauri dev`)**: The api-server is started directly (not as a SEA sidecar) by `beforeDevCommand` via `concurrently`. Vite runs at `:5173` and its dev proxy forwards `/api/*` to the api-server at `:3000`. In Rust, `#[cfg(not(debug_assertions))]` gates the sidecar spawn so it is skipped entirely in dev/debug builds — no port conflict. The Tauri window opens `devUrl=http://localhost:5173`.
+
+**Dev vs production URL resolution**: `tauri.conf.json` sets `build.devUrl = "http://localhost:5173"` and `app.windows[0].url = "http://localhost:3000"`. In `pnpm tauri dev`, Tauri always uses `devUrl`, so the window opens the Vite dev server — the `windows[0].url` field is only used in production builds. There is no ambiguity between the two URLs at runtime.
 
 ## Artifacts
 
@@ -78,7 +108,7 @@ Digital scorecard for professional slalom waterski tournaments. A clone of slalo
 - **IWWF 2026 rope colours**: `getRopeColour()` in utils.ts maps all shortline lengths to IWWF official colours (Red=18.25m, Orange=16m, Yellow=14.25m, Green=13m, Blue=12m, Violet=11.25m, Pink=10.25m, Black=9.75m). Colour badges shown on Recording, Judging, and Scoreboard pages.
 - **SurePath integration**: WaterskiConnect WebSocket client (`services/surepath-client.ts`) auto-connects when enabled; creates passes on speed trigger; configurable Event Name, Sub ID, Observer PIN, WS URL
 - **WaterskiConnect webhook**: `POST /api/waterskiconnect/inbound` for manual scoring software push; status at `GET /api/waterskiconnect/status`
-- **Dropbox update push**: `POST /api/update/push-to-dropbox` — builds ZIP in memory, uploads to `/SlalomStream/slalomstream-vX.X.X.zip`, creates a public shared link, auto-saves it as `update_download_url`. Admin panel "Push to Dropbox" button (blue, Dropbox-branded). Dropbox SDK via Replit integration (`artifacts/api-server/src/services/dropbox-client.ts`)
+- **Updates**: Handled by the Tauri built-in updater — checks GitHub Releases on startup, prompts user to install. No Admin panel update UI; the old NSIS installer and ZIP-update routes have been removed.
 - **Test data**: test tournament with 8 skiers, 3 judges (PINs 1111/2222/3333), 6 scored passes. Run `pnpm --filter @workspace/db run seed:test` to re-seed
 
 ## Stack
@@ -105,7 +135,22 @@ artifacts-monorepo/
 │   ├── api-zod/            # Generated Zod schemas from OpenAPI
 │   └── db/                 # Drizzle ORM schema + DB connection
 ├── scripts/                # Utility scripts (single workspace package)
+│   ├── bump-version.js     # Atomically bump version in version.json + Tauri configs
+│   ├── build-sea.js        # Package api-server dist as Node.js SEA binary for Tauri sidecar
 │   └── src/                # Individual .ts scripts, run via `pnpm --filter @workspace/scripts run <script>`
+├── src-tauri/              # Tauri v2 desktop app (Rust)
+│   ├── src/
+│   │   ├── main.rs         # Tauri entry point
+│   │   └── lib.rs          # Sidecar lifecycle + auto-updater
+│   ├── capabilities/       # Tauri capability permissions
+│   ├── icons/              # App icons (populated before build)
+│   ├── Cargo.toml          # Rust dependencies
+│   ├── build.rs            # Tauri build script
+│   └── tauri.conf.json     # Tauri configuration (identifier, version, sidecar, updater)
+├── .github/workflows/
+│   ├── ci.yml              # PR checks (Prettier + TypeScript)
+│   └── tauri-build.yml     # Release builds (Windows + macOS) triggered by v* tags
+├── version.json            # Canonical app version (kept in sync with Cargo.toml by bump-version.js)
 ├── pnpm-workspace.yaml     # pnpm workspace (artifacts/*, lib/*, lib/integrations/*, scripts)
 ├── tsconfig.base.json      # Shared TS options (composite, bundler resolution, es2022)
 ├── tsconfig.json           # Root TS project references

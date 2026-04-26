@@ -66,8 +66,8 @@ const RELEASES: ReleaseEntry[] = [
     date: 'April 2026',
     current: true,
     items: [
-      'Windows installer — SlalomStream-Setup.exe bundles Node.js, the server, and the frontend into a single installer; double-click to install; creates a desktop shortcut; completely offline after install',
-      'Dropbox update push — "Push to Dropbox" button in Admin uploads the current build to your connected Dropbox and automatically saves the download URL; venue laptops fetch updates in one click',
+      'Tauri desktop app — native Windows .exe installer and macOS .dmg; WebView2 shell (Windows) or Safari WebKit (macOS) wraps the React frontend; Express API server runs as a managed sidecar process that starts and stops with the app',
+      'In-app automatic updates — SlalomStream checks GitHub Releases on startup; a one-click dialog downloads and installs the update with automatic restart; no manual ZIP download or Admin panel needed',
       'Start list CSV import — three-step wizard in Admin: paste or upload CSV, map columns (name, division, club, PIN), preview with duplicate/conflict detection; imports whole roster in one operation',
       'SurePath health monitoring — green/amber/red status pill in Admin shows connection health and time since last pass received; Reconnect button available when health is not green; SurePathDot indicator in the Recording page header polls every 10 s',
       'Official results PDF — one-click printable results sheet from the Scoreboard page; formatted for posting at the venue; shows all skiers ranked by best score',
@@ -193,22 +193,22 @@ export default function Help() {
       </Section>
 
       {/* Local Install */}
-      <Section icon={Download} title="Getting SlalomStream — Windows Installer">
+      <Section icon={Download} title="Getting SlalomStream — Desktop App">
         <p className="text-muted-foreground">
-          SlalomStream ships as a self-contained Windows installer. No Node.js or database setup is needed — everything is bundled inside.
+          SlalomStream ships as a native desktop application for Windows and macOS. No Node.js or database setup is needed — everything is bundled inside. The app includes an automatic updater that notifies you when a new version is available.
         </p>
 
         <div className="p-4 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-xl space-y-2">
           <p className="font-bold text-emerald-800 dark:text-emerald-200">Fresh install</p>
           <div className="space-y-2 text-sm">
             <Step n={1}>
-              Download <strong>SlalomStream-Setup.exe</strong> from the link provided by your tournament administrator (available in Admin → Software Update → the configured download URL).
+              Download <strong>SlalomStream-Setup.exe</strong> (Windows) or <strong>SlalomStream.dmg</strong> (macOS) from the latest GitHub Release.
             </Step>
             <Step n={2}>
-              Double-click the installer. Choose your installation folder and server port (default <Code>3000</Code>). Click Install.
+              Run the installer. On Windows, double-click the <Code>.exe</Code>. On macOS, open the <Code>.dmg</Code> and drag SlalomStream to Applications.
             </Step>
             <Step n={3}>
-              A <strong>SlalomStream</strong> shortcut appears on your desktop. Double-click it to start the server and open it in your browser automatically.
+              Launch <strong>SlalomStream</strong> from your desktop or Applications folder. The app starts automatically — no browser or server setup needed.
             </Step>
             <Step n={4}>
               On the <strong>Recording page</strong>, expand "Judge Station QR Codes". Judges scan their station QR code from any device on the same WiFi network.
@@ -217,8 +217,10 @@ export default function Help() {
         </div>
 
         <div className="p-4 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-xl space-y-2 mt-2">
-          <p className="font-bold text-blue-800 dark:text-blue-200">Updating an existing install</p>
-          <p className="text-sm text-muted-foreground">Go to <strong>Admin → Software Update</strong> and click <strong>Fetch &amp; prepare update</strong>. The server downloads the latest build from Dropbox, previews the version, and applies it with a one-click restart — no file download or upload needed.</p>
+          <p className="font-bold text-blue-800 dark:text-blue-200">Automatic updates</p>
+          <p className="text-sm text-muted-foreground">
+            When a new version is released, SlalomStream shows a notification on startup. Click <strong>Install</strong> to download and apply the update automatically — the app restarts and you're on the latest version. No manual download or ZIP file needed.
+          </p>
         </div>
 
         <div className="p-3 bg-muted/50 rounded-xl text-xs text-muted-foreground mt-2">

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "nz.slalomstream.app",
+  "productName": "SlalomStream",
+  "version": "1.7.0",
+  "build": {
+    "frontendDist": "../artifacts/slalom-stream/dist/public",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "concurrently \"pnpm --filter @workspace/api-server run dev\" \"pnpm --filter @workspace/slalom-stream run dev\"",
+    "beforeBuildCommand": "pnpm --filter @workspace/api-server run build && node scripts/build-sea.mjs && pnpm --filter @workspace/slalom-stream run build"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "SlalomStream",
+        "url": "http://localhost:3000",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../artifacts/slalom-stream/dist/public": "static",
+      "pglite-resources": "pglite"
+    },
+    "externalBin": [
+      "binaries/api-server"
+    ],
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    },
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "",
+      "exceptionDomain": "",
+      "signingIdentity": null,
+      "providerShortName": null,
+      "entitlements": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/nztwsa/slalomstream/releases/latest/download/update.json"
+      ],
+      "dialog": false,
+      "pubkey": "PLACEHOLDER_REPLACE_ME"
+    }
+  }
+}

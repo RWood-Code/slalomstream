@@ -1,0 +1,18 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/schema/acl/capability.json",
+  "identifier": "default",
+  "description": "Default capabilities for SlalomStream desktop app",
+  "platforms": ["linux", "macOS", "windows"],
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "shell:allow-execute",
+    "shell:allow-kill",
+    "shell:allow-stdin-write",
+    "fs:read-all",
+    "fs:write-all",
+    "dialog:default",
+    "notification:default",
+    "updater:default"
+  ]
+}

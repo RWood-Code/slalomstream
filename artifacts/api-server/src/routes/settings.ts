@@ -58,7 +58,7 @@ router.put("/", async (req, res) => {
   await getOrCreateSettings();
 
   // Build a partial update — only touch fields that were explicitly provided.
-  // This makes the endpoint merge-safe: a caller sending only { github_repo }
+  // This makes the endpoint merge-safe: a caller sending only one field
   // will not accidentally reset admin_pin, waterskiconnect settings, etc.
   const patch: Partial<typeof appSettingsTable.$inferInsert> = {};
 
@@ -73,7 +73,6 @@ router.put("/", async (req, res) => {
   if ("active_tournament_id"    in body) patch.active_tournament_id     = (body.active_tournament_id as number | null) ?? null;
   if ("connection_mode"         in body) patch.connection_mode          = (body.connection_mode as string) || "local";
   if ("public_url"              in body) patch.public_url               = (body.public_url as string | null) ?? null;
-  if ("github_repo"             in body) patch.github_repo              = (body.github_repo as string | null) ?? null;
   if ("update_download_url"     in body) patch.update_download_url      = (body.update_download_url as string | null) ?? null;
 
   if (Object.keys(patch).length === 0) {

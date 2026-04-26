@@ -12,18 +12,6 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
 
-// Temporary installer download endpoint (dev convenience — served from workspace root)
-app.get("/api/installer", (req, res) => {
-  const installerPath = path.resolve(
-    process.env.INSTALLER_PATH || path.join(process.cwd(), "..", "..", "SlalomStream-Setup.exe")
-  );
-  if (!existsSync(installerPath)) {
-    res.status(404).send("Installer not found at: " + installerPath);
-    return;
-  }
-  res.download(installerPath, "SlalomStream-Setup.exe");
-});
-
 // Serve the built frontend when running as a standalone local server.
 // Set SERVE_STATIC=true and STATIC_DIR to the path of the built frontend files.
 const serveStatic = process.env.SERVE_STATIC === "true";
