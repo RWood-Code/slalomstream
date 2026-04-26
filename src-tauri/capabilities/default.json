@@ -6,12 +6,10 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "core:asset:allow-fetch",
     "shell:allow-execute",
     "shell:allow-kill",
     "shell:allow-stdin-write",
-    "fs:read-all",
-    "fs:write-all",
+    "fs:default",
     "dialog:default",
     "notification:default",
     "updater:default"
