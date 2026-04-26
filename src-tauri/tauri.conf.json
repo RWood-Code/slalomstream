@@ -59,15 +59,21 @@
       "signingIdentity": null,
       "providerShortName": null,
       "entitlements": "entitlements.plist",
-      "infoPlist": {
-        "NSCameraUsageDescription": "SlalomStream records slalom runs through your connected capture card.",
-        "NSMicrophoneUsageDescription": "SlalomStream captures audio alongside video recordings of slalom runs."
-      },
+      "infoPlist": "Info.plist",
       "dmg": {
         "background": "dmg-background.png",
-        "windowSize": { "width": 800, "height": 400 },
-        "appPosition": { "x": 190, "y": 195 },
-        "applicationFolderPosition": { "x": 615, "y": 195 }
+        "windowSize": {
+          "width": 800,
+          "height": 400
+        },
+        "appPosition": {
+          "x": 190,
+          "y": 195
+        },
+        "applicationFolderPosition": {
+          "x": 615,
+          "y": 195
+        }
       }
     }
   },
