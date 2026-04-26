@@ -380,6 +380,31 @@ fn list_recordings(folder: String) -> Result<Vec<RecordingEntry>, String> {
     Ok(entries)
 }
 
+// ─── Recording deletion ───────────────────────────────────────────────────────
+
+#[tauri::command]
+fn delete_recording(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if ext != "mp4" && ext != "webm" {
+        return Err("delete_recording only accepts .mp4 or .webm files".to_string());
+    }
+    std::fs::remove_file(p).map_err(|e| format!("Delete error: {e}"))?;
+    if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+        if let Some(parent) = p.parent() {
+            let markers = parent.join(format!("{}.markers.json", stem));
+            if markers.exists() {
+                std::fs::remove_file(&markers).ok();
+            }
+        }
+    }
+    Ok(())
+}
+
 // ─── File writing ─────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -1282,6 +1307,7 @@ pub fn run() {
             write_binary_file,
             copy_file,
             list_recordings,
+            delete_recording,
             list_video_devices,
             list_audio_devices,
             start_ffmpeg_recording,

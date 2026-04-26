@@ -14,7 +14,7 @@ import {
   Clock, Flag, AlertTriangle, FileSearch, UserPlus, Trophy,
   Mic, MicOff, BookmarkPlus, SkipBack, SkipForward,
   ChevronLeft, ChevronRight, Repeat, HardDrive, WifiOff,
-  Video, Scissors, Film, Search,
+  Video, Scissors, Film, Search, Trash2,
 } from 'lucide-react';
 import { ROPE_LENGTHS, SPEEDS, VALID_IWWF_SCORES, DIVISIONS, formatRope, formatSpeed, getRopeColour, getJudgingPanel, suggestNextRope } from '@/lib/utils';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
@@ -171,6 +171,19 @@ async function idbGetAllRecordingHandles(): Promise<RecordingHandleEntry[]> {
     };
     cursorReq.onerror = () => reject(cursorReq.error);
   });
+}
+
+async function idbDeleteRecordingHandle(filename: string): Promise<void> {
+  try {
+    const db = await openRecordingsDB();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction([IDB_REC_STORE, IDB_REC_MARKERS_STORE], 'readwrite');
+      tx.objectStore(IDB_REC_STORE).delete(filename);
+      tx.objectStore(IDB_REC_MARKERS_STORE).delete(filename);
+      tx.oncomplete = () => resolve();
+      tx.onerror    = () => reject(tx.error);
+    });
+  } catch { /* non-critical */ }
 }
 
 // ─── Save folder hook (Tauri-native + browser fallback) ───────────────────────
@@ -1878,6 +1891,8 @@ function RecordingLibrary({
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [openingId, setOpeningId] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<LibraryEntry | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const fmtSize = (bytes: number) => {
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
@@ -2048,6 +2063,41 @@ function RecordingLibrary({
     }
   };
 
+  const deleteEntry = async (entry: LibraryEntry) => {
+    setDeletingId(entry.id);
+    try {
+      if (isTauri && entry.path) {
+        await tauriInvoke('delete_recording', { path: entry.path });
+      } else {
+        // Browser mode: remove file from directory handle + clean up IDB
+        const markerFilename = entry.filename.replace(/\.[^.]+$/, '') + '.markers.json';
+        const dirs = ([primaryHandle, backupHandle].filter(Boolean) as FileSystemDirectoryHandle[]);
+        let removedFromDisk = false;
+        for (const dir of dirs) {
+          try {
+            await dir.removeEntry(entry.filename);
+            // Also try to remove the sidecar
+            try { await dir.removeEntry(markerFilename); } catch { /* no sidecar in this dir */ }
+            removedFromDisk = true;
+            break;
+          } catch { /* not in this dir or no permission */ }
+        }
+        // Always purge from IDB (handle is stale regardless)
+        await idbDeleteRecordingHandle(entry.filename);
+        if (!removedFromDisk && dirs.length > 0) {
+          // File couldn't be found in any directory — likely already gone or permission denied
+          setError(`Could not delete "${entry.filename}" from disk. The file may have already been removed or the folder permission was lost. It has been removed from the library list.`);
+        }
+      }
+      setEntries(prev => prev.filter(e => e.id !== entry.id));
+    } catch (err: unknown) {
+      setError(`Failed to delete: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDeletingId(null);
+      setConfirmDelete(null);
+    }
+  };
+
   // In Tauri mode we need at least one configured path to scan the filesystem.
   // In browser mode the IDB registry always works regardless of directory handle availability,
   // so we never hide the library; the directory-handle fallback scan is best-effort only.
@@ -2061,6 +2111,44 @@ function RecordingLibrary({
 
   return (
     <>
+      {/* Delete confirmation dialog */}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-sm p-5">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-9 h-9 rounded-xl bg-red-500/15 border border-red-500/30 flex items-center justify-center shrink-0">
+                <Trash2 className="w-4 h-4 text-red-400" />
+              </div>
+              <div>
+                <p className="font-bold text-white text-sm">Delete recording?</p>
+                <p className="text-slate-400 text-xs mt-0.5 break-all">{confirmDelete.filename}</p>
+                {confirmDelete.hasMarkers && (
+                  <p className="text-amber-400 text-xs mt-1">The markers file will also be deleted.</p>
+                )}
+              </div>
+            </div>
+            <p className="text-slate-400 text-xs mb-4">This action cannot be undone.</p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmDelete(null)}
+                disabled={!!deletingId}
+                className="flex-1 py-2 rounded-xl border border-slate-700 text-slate-300 text-sm font-medium hover:bg-slate-800 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => deleteEntry(confirmDelete)}
+                disabled={!!deletingId}
+                className="flex-1 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-sm font-semibold transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5"
+              >
+                {deletingId ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {open && (
         <div className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm" onClick={onClose} />
       )}
@@ -2147,21 +2235,31 @@ function RecordingLibrary({
                     {filtered.map(entry => {
                       const rc = entry.rope ? getRopeColour(entry.rope) : null;
                       const isOpening = openingId === entry.id;
+                      const isDeleting = deletingId === entry.id;
                       return (
-                        <button
+                        <div
                           key={entry.id}
-                          onClick={() => openEntry(entry)}
-                          disabled={!!openingId}
-                          className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-800/60 transition-colors text-left group disabled:opacity-60"
+                          className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-800/60 transition-colors group"
                         >
-                          <div className="w-8 h-8 rounded-lg bg-slate-800 group-hover:bg-slate-700 flex items-center justify-center shrink-0 transition-colors border border-slate-700/60">
+                          {/* Play button */}
+                          <button
+                            onClick={() => openEntry(entry)}
+                            disabled={!!openingId || !!deletingId}
+                            className="w-8 h-8 rounded-lg bg-slate-800 group-hover:bg-slate-700 flex items-center justify-center shrink-0 transition-colors border border-slate-700/60 disabled:opacity-50"
+                            title="Play recording"
+                          >
                             {isOpening
                               ? <RefreshCw className="w-3.5 h-3.5 text-purple-400 animate-spin" />
                               : <Play className="w-3.5 h-3.5 text-slate-300 fill-slate-300 ml-0.5" />
                             }
-                          </div>
+                          </button>
 
-                          <div className="flex-1 min-w-0">
+                          {/* Metadata (clicking opens the recording) */}
+                          <button
+                            onClick={() => openEntry(entry)}
+                            disabled={!!openingId || !!deletingId}
+                            className="flex-1 min-w-0 text-left disabled:opacity-50"
+                          >
                             {/* Skier name + division + rope badge */}
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <span className="font-semibold text-sm text-white truncate">{entry.skierName}</span>
@@ -2191,10 +2289,23 @@ function RecordingLibrary({
                                 : entry.filename}
                               {entry.sizeBytes > 0 && ` · ${fmtSize(entry.sizeBytes)}`}
                             </p>
-                          </div>
+                          </button>
 
                           <MonitorPlay className="w-4 h-4 text-slate-600 group-hover:text-purple-400 transition-colors shrink-0" />
-                        </button>
+
+                          {/* Delete button */}
+                          <button
+                            onClick={() => setConfirmDelete(entry)}
+                            disabled={!!openingId || !!deletingId}
+                            className="p-1.5 rounded-lg text-slate-600 hover:text-red-400 hover:bg-red-500/10 focus-visible:text-red-400 focus-visible:bg-red-500/10 active:text-red-400 transition-colors shrink-0 disabled:opacity-50 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 active:opacity-100"
+                            title="Delete recording"
+                          >
+                            {isDeleting
+                              ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                              : <Trash2 className="w-3.5 h-3.5" />
+                            }
+                          </button>
+                        </div>
                       );
                     })}
                   </div>
