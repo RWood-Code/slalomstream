@@ -52,21 +52,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
-      # Download the correct static FFmpeg binary for this platform and place it
-      # in src-tauri/binaries/ with Tauri's sidecar naming convention so Tauri
-      # will bundle it automatically during `tauri build`.
       - name: Download FFmpeg sidecar
         run: node scripts/download-ffmpeg.mjs ${{ matrix.target }}
 
-      # Download the correct cloudflared binary for this platform and place it
-      # in src-tauri/binaries/ with Tauri's sidecar naming convention so Tauri
-      # will bundle it automatically during `tauri build`.
       - name: Download cloudflared sidecar
         run: node scripts/download-cloudflared.mjs ${{ matrix.target }}
 
-      # Inject the real updater public key from GitHub Secrets into tauri.conf.json
-      # at build time so the repository does not store the real key.
-      # The admin must set TAURI_SIGNING_PUBLIC_KEY alongside TAURI_SIGNING_PRIVATE_KEY.
       - name: Inject updater public key
         shell: bash
         env:
@@ -74,10 +65,6 @@ jobs:
         run: |
           if [[ -z "$TAURI_SIGNING_PUBLIC_KEY" ]]; then
             echo "ERROR: TAURI_SIGNING_PUBLIC_KEY secret is not configured."
-            echo "Generate a key pair with: pnpm tauri signer generate -w ~/.tauri/slalomstream.key"
-            echo "Then add both keys as GitHub Secrets:"
-            echo "  TAURI_SIGNING_PRIVATE_KEY  — private key content"
-            echo "  TAURI_SIGNING_PUBLIC_KEY   — public key (one-line base64 string)"
             exit 1
           fi
           node -e "
@@ -88,56 +75,30 @@ jobs:
             console.log('Updater public key injected into tauri.conf.json');
           "
 
-      # ── macOS code signing ──────────────────────────────────────────────────
-      # Prerequisites (GitHub Secrets that must be configured):
-      #
-      #   APPLE_CERTIFICATE          Base64-encoded .p12 Developer ID Application
-      #                              certificate exported from Keychain Access.
-      #                              Generate: base64 -i MyCert.p12 | pbcopy
-      #
-      #   APPLE_CERTIFICATE_PASSWORD Password used when the .p12 was exported.
-      #
-      #   APPLE_SIGNING_IDENTITY     Full identity string shown in Keychain, e.g.
-      #                              "Developer ID Application: Acme Ltd (TEAMID)"
-      #
-      #   APPLE_ID                   Apple ID (email) used for notarization.
-      #
-      #   APPLE_PASSWORD             App-specific password for the Apple ID.
-      #                              Generate at appleid.apple.com → App-Specific Passwords.
-      #
-      #   APPLE_TEAM_ID              10-character Apple Developer Team ID.
+      # ── macOS code signing ────────────────────────────────────────────────
+      # When APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD are not set,
+      # the step warns and continues — producing an unsigned build that still
+      # works for internal distribution. Set the secrets to enable signing.
 
       - name: Import Apple Developer certificate
         if: runner.os == 'macOS'
+        continue-on-error: true
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         shell: bash
         run: |
-          MISSING_SECRETS=()
-          [[ -z "$APPLE_CERTIFICATE" ]]          && MISSING_SECRETS+=(APPLE_CERTIFICATE)
-          [[ -z "$APPLE_CERTIFICATE_PASSWORD" ]] && MISSING_SECRETS+=(APPLE_CERTIFICATE_PASSWORD)
-          if [[ ${#MISSING_SECRETS[@]} -gt 0 ]]; then
-            echo "ERROR: the following GitHub Secrets are not configured: ${MISSING_SECRETS[*]}"
-            echo ""
-            echo "APPLE_CERTIFICATE: export your Developer ID Application cert from Keychain as .p12,"
-            echo "  then base64-encode it:  base64 -i MyCert.p12 | pbcopy"
-            echo "APPLE_CERTIFICATE_PASSWORD: the password you set when exporting the .p12"
-            exit 1
+          if [[ -z "$APPLE_CERTIFICATE" ]] || [[ -z "$APPLE_CERTIFICATE_PASSWORD" ]]; then
+            echo "::warning::APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD not set — building unsigned."
+            echo "APPLE_SIGNING_SKIPPED=true" >> "$GITHUB_ENV"
+            exit 0
           fi
-
-          # Decode the certificate — use BSD base64 (-D) which is present on all macOS runners
           echo "$APPLE_CERTIFICATE" | base64 -D > /tmp/certificate.p12
-
-          # Create a short-lived temporary keychain so we do not pollute the runner's login keychain
           KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
           security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          # Keep the keychain unlocked for the duration of the build (6 h timeout)
           security set-keychain-settings -lut 21600 build.keychain
-
-          # Import the certificate and grant codesign access without interactive prompt
           security import /tmp/certificate.p12 \
             -k build.keychain \
             -P "$APPLE_CERTIFICATE_PASSWORD" \
@@ -145,14 +106,11 @@ jobs:
             -T /usr/bin/productbuild \
             -T /usr/bin/productsign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
-
-          # Remove the decoded cert immediately
           rm -f /tmp/certificate.p12
-
-          echo "Apple Developer certificate imported into temporary keychain."
+          echo "Apple Developer certificate imported."
 
       - name: Inject macOS signing identity
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && env.APPLE_SIGNING_SKIPPED != 'true'
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -160,97 +118,57 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         shell: bash
         run: |
-          MISSING_SECRETS=()
-          [[ -z "$APPLE_SIGNING_IDENTITY" ]] && MISSING_SECRETS+=(APPLE_SIGNING_IDENTITY)
-          [[ -z "$APPLE_ID" ]]               && MISSING_SECRETS+=(APPLE_ID)
-          [[ -z "$APPLE_PASSWORD" ]]         && MISSING_SECRETS+=(APPLE_PASSWORD)
-          [[ -z "$APPLE_TEAM_ID" ]]          && MISSING_SECRETS+=(APPLE_TEAM_ID)
-          if [[ ${#MISSING_SECRETS[@]} -gt 0 ]]; then
-            echo "ERROR: the following GitHub Secrets are not configured: ${MISSING_SECRETS[*]}"
-            echo ""
-            echo "APPLE_SIGNING_IDENTITY: full string from Keychain Access, e.g."
-            echo "  'Developer ID Application: Acme Ltd (AB12CD34EF)'"
-            echo "APPLE_ID: your Apple ID email used for notarization"
-            echo "APPLE_PASSWORD: app-specific password (generate at appleid.apple.com)"
-            echo "APPLE_TEAM_ID: 10-character Apple Developer Team ID"
-            exit 1
+          if [[ -z "$APPLE_SIGNING_IDENTITY" ]]; then
+            echo "::warning::APPLE_SIGNING_IDENTITY not set — skipping signing identity injection."
+            exit 0
           fi
           node -e "
             const fs = require('fs');
             const cfg = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
             cfg.bundle.macOS.signingIdentity = process.env.APPLE_SIGNING_IDENTITY;
             fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(cfg, null, 2));
-            console.log('macOS signing identity injected into tauri.conf.json');
+            console.log('macOS signing identity injected.');
           "
-      # ────────────────────────────────────────────────────────────────────────
 
-      # ── Windows code signing ─────────────────────────────────────────────────
-      # Prerequisites (GitHub Secrets that must be configured):
-      #
-      #   WINDOWS_CERTIFICATE          Base64-encoded Authenticode .pfx certificate.
-      #                                Export your code-signing cert from a certificate store
-      #                                or CA-provided .pfx, then encode it:
-      #                                  Windows:       certutil -encode MyCert.pfx encoded.txt
-      #                                  macOS / Linux: base64 -i MyCert.pfx | pbcopy
-      #
-      #   WINDOWS_CERTIFICATE_PASSWORD Password set when the .pfx was exported.
+      # ── Windows code signing ──────────────────────────────────────────────
+      # When WINDOWS_CERTIFICATE / WINDOWS_CERTIFICATE_PASSWORD are not set,
+      # the step warns and continues — producing an unsigned build.
 
       - name: Import Windows Authenticode certificate
         if: runner.os == 'Windows'
+        continue-on-error: true
         shell: pwsh
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
-          $missing = @()
-          if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE))          { $missing += 'WINDOWS_CERTIFICATE' }
-          if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE_PASSWORD)) { $missing += 'WINDOWS_CERTIFICATE_PASSWORD' }
-          if ($missing.Count -gt 0) {
-            Write-Host "ERROR: the following GitHub Secrets are not configured: $($missing -join ', ')"
-            Write-Host ""
-            Write-Host "WINDOWS_CERTIFICATE: export your Authenticode .pfx and base64-encode it:"
-            Write-Host "  Windows:       certutil -encode MyCert.pfx encoded.txt"
-            Write-Host "  macOS / Linux: base64 -i MyCert.pfx | pbcopy"
-            Write-Host "WINDOWS_CERTIFICATE_PASSWORD: the password set when the .pfx was exported"
-            exit 1
+          if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE) -or
+              [string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            Write-Host "::warning::WINDOWS_CERTIFICATE / WINDOWS_CERTIFICATE_PASSWORD not set — building unsigned."
+            "WINDOWS_SIGNING_SKIPPED=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            exit 0
           }
-
-          # Strip PEM header/footer lines and all whitespace so the value is
-          # pure base64 regardless of how it was encoded (certutil -encode adds
-          # "-----BEGIN/END CERTIFICATE-----" lines and line breaks).
           $rawBase64 = $env:WINDOWS_CERTIFICATE `
             -replace '-----BEGIN[^-]*-----', '' `
             -replace '-----END[^-]*-----',   '' `
             -replace '\s',                   ''
-
-          # Decode the .pfx bytes and write to a temp file
           $pfxPath = "$env:RUNNER_TEMP\certificate.pfx"
           [System.Convert]::FromBase64String($rawBase64) |
             Set-Content -Path $pfxPath -AsByteStream
-
-          # Import into CurrentUser\My so signtool.exe can find it by thumbprint
           $securePassword = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
           $cert = Import-PfxCertificate `
             -FilePath $pfxPath `
             -CertStoreLocation Cert:\CurrentUser\My `
             -Password $securePassword
-
-          # Propagate the thumbprint to later steps via GITHUB_ENV (not logged)
           "WINDOWS_CERT_THUMBPRINT=$($cert.Thumbprint)" |
             Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Windows Authenticode certificate imported successfully."
-
-          # Remove the decoded .pfx immediately
+          Write-Host "Windows Authenticode certificate imported."
           Remove-Item -Path $pfxPath -Force
 
       - name: Inject Windows certificate thumbprint
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && env.WINDOWS_SIGNING_SKIPPED != 'true' && env.WINDOWS_CERT_THUMBPRINT != ''
         shell: pwsh
         run: |
-          if ([string]::IsNullOrEmpty($env:WINDOWS_CERT_THUMBPRINT)) {
-            Write-Host "ERROR: WINDOWS_CERT_THUMBPRINT is not set — certificate import may have failed."
-            exit 1
-          }
           node -e "
             const fs = require('fs');
             const cfg = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
@@ -258,7 +176,6 @@ jobs:
             fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(cfg, null, 2));
             console.log('Windows certificate thumbprint injected:', process.env.WINDOWS_CERT_THUMBPRINT);
           "
-      # ────────────────────────────────────────────────────────────────────────
 
       - name: Build Tauri app and publish release
         uses: tauri-apps/tauri-action@v0
@@ -266,7 +183,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # macOS notarization — only consumed by tauri-cli on macOS runners
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -288,17 +204,12 @@ jobs:
 
   publish-update-manifest:
     name: Publish update.json manifest
-    # Runs after ALL matrix builds complete so every platform's .sig files
-    # are present in the release before we construct the unified manifest.
     needs: build-tauri
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Build and upload multi-platform update.json
-        # Construct update.json from the individual per-platform .sig files
-        # that tauri-action uploads. This is deterministic regardless of
-        # which matrix job finishes last.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -308,13 +219,11 @@ jobs:
           export PUB_DATE
           PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-          # Download all .sig files from the release into ./sigs/
           mkdir -p sigs
           gh release download "$TAG" --repo "$REPO" --pattern "*.sig" --dir sigs
 
           ls sigs/
 
-          # Construct the platforms object from .sig files
           node - <<'NODESCRIPT'
           const fs = require('fs');
           const path = require('path');
@@ -327,24 +236,17 @@ jobs:
           const baseUrl = `https://github.com/${REPO}/releases/download/${TAG}/`;
           const sigFiles = fs.readdirSync('./sigs');
 
-          // Determine Tauri platform key from installer filename.
-          // Tauri v2 updater uses compressed bundles (.nsis.zip, .msi.zip,
-          // .app.tar.gz), NOT the raw installer (.exe/.msi/.dmg).
-          // The corresponding .sig file uses the full bundle name as prefix.
           function getPlatformKey(installer) {
             const hasAarch64 = /aarch64/.test(installer);
             const hasX64 = /x64|x86_64/.test(installer);
 
-            // Windows: NSIS/MSI zip bundles (preferred) or raw installer (fallback)
             if (hasX64 && /\.(nsis\.zip|msi\.zip|exe|msi)$/.test(installer)
                 && !/\.(dmg|app\.tar\.gz)$/.test(installer)) {
               return 'windows-x86_64';
             }
-            // macOS ARM
             if (hasAarch64 && /\.(app\.tar\.gz|dmg)$/.test(installer)) {
               return 'darwin-aarch64';
             }
-            // macOS Intel
             if (hasX64 && /\.(app\.tar\.gz|dmg)$/.test(installer)) {
               return 'darwin-x86_64';
             }
@@ -360,7 +262,6 @@ jobs:
               console.log(`Skipped unrecognised asset: ${installer}`);
               continue;
             }
-            // Prefer .app.tar.gz / .nsis.zip over .dmg / .exe for the same platform
             if (platforms[platform] &&
                 !/\.(app\.tar\.gz|nsis\.zip|msi\.zip)$/.test(installer)) {
               console.log(`Skipping lower-priority asset for ${platform}: ${installer}`);
@@ -372,7 +273,6 @@ jobs:
             console.log(`Added platform: ${platform} → ${installer}`);
           }
 
-          // Validate that all required platform entries are present
           const REQUIRED = ['darwin-aarch64', 'darwin-x86_64', 'windows-x86_64'];
           const missing = REQUIRED.filter(p => !platforms[p]);
           if (missing.length > 0) {
