@@ -818,7 +818,7 @@ async fn start_ffmpeg_preview(
     state: tauri::State<'_, Arc<FfmpegPreviewState>>,
 ) -> Result<(), String> {
     {
-        let mut guard = state.child.lock().map_err(|e| e.to_string())?;
+        let guard = state.child.lock().map_err(|e| e.to_string())?;
         if guard.is_some() {
             return Err("Preview already running".to_string());
         }
@@ -1156,7 +1156,11 @@ async fn spawn_cloudflared(
                             .emit("tunnel-stopped", serde_json::json!({ "reconnecting": true }))
                             .ok();
 
-                        // Reconnect after backoff unless shutdown was requested in the meantime
+                        // Reconnect after backoff unless shutdown was requested in the meantime.
+                        // We do the sleep + guard check in one spawned task, then spawn a second
+                        // task for the actual reconnect. This avoids awaiting spawn_cloudflared
+                        // inside the outer spawn, which would require the future to be Send (it
+                        // isn't, because CommandChild is not Send across an await point).
                         let retry_handle = app_handle.clone();
                         let retry_state = state_monitor.clone();
                         let retry_token = token_for_retry.clone();
@@ -1173,11 +1177,13 @@ async fn spawn_cloudflared(
                                 }
                             }
                             eprintln!("[Tunnel] Attempting reconnect…");
-                            // Box::pin breaks the recursive async type so the
-                            // compiler can size the surrounding async block.
-                            if let Err(e) = Box::pin(spawn_cloudflared(retry_handle, retry_token, retry_state)).await {
-                                eprintln!("[Tunnel] Reconnect failed: {e}");
-                            }
+                            // Spawn a fresh top-level task for the reconnect so we don't
+                            // need to await a non-Send future here.
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(e) = spawn_cloudflared(retry_handle, retry_token, retry_state).await {
+                                    eprintln!("[Tunnel] Reconnect failed: {e}");
+                                }
+                            });
                         });
                     }
                     break;
@@ -1373,8 +1379,10 @@ async fn check_for_updates(app: AppHandle) {
             app.dialog()
                 .message(msg)
                 .title("Update Available")
-                .ok_label("Install & Restart")
-                .cancel_label("Later")
+                .buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom(
+                    "Install & Restart".to_string(),
+                    "Later".to_string(),
+                ))
                 .show(move |confirmed| {
                     if confirmed {
                         let app_for_restart = app.clone();
