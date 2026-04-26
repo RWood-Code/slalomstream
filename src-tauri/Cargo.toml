@@ -1,6 +1,6 @@
 [package]
 name = "slalom-stream"
-version = "1.7.0"
+version = "2.0.0"
 description = "SlalomStream desktop app"
 authors = ["NZTWSA"]
 edition = "2021"
