@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, RunEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -776,7 +776,7 @@ async fn start_ffmpeg_recording(
     Ok(())
 }
 
-fn stop_ffmpeg_child(child: CommandChild) {
+fn stop_ffmpeg_child(mut child: CommandChild) {
     // Send 'q' + newline to FFmpeg's stdin for graceful shutdown so it can flush
     // the MP4 container metadata (moov atom) before exiting.
     // If stdin write fails (e.g. pipe already closed), fall back to SIGTERM/kill.
@@ -1373,8 +1373,8 @@ async fn check_for_updates(app: AppHandle) {
             app.dialog()
                 .message(msg)
                 .title("Update Available")
-                .ok_button_label("Install & Restart")
-                .cancel_button_label("Later")
+                .ok_label("Install & Restart")
+                .cancel_label("Later")
                 .show(move |confirmed| {
                     if confirmed {
                         let app_for_restart = app.clone();
