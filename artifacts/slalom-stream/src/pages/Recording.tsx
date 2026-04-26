@@ -14,7 +14,7 @@ import {
   Clock, Flag, AlertTriangle, FileSearch, UserPlus, Trophy,
   Mic, MicOff, BookmarkPlus, SkipBack, SkipForward,
   ChevronLeft, ChevronRight, Repeat, HardDrive, WifiOff,
-  Video, Scissors,
+  Video, Scissors, Film, Search,
 } from 'lucide-react';
 import { ROPE_LENGTHS, SPEEDS, VALID_IWWF_SCORES, DIVISIONS, formatRope, formatSpeed, getRopeColour, getJudgingPanel, suggestNextRope } from '@/lib/utils';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
@@ -65,6 +65,111 @@ async function idbDeleteDir(key: string): Promise<void> {
     tx.objectStore(IDB_STORE).delete(key);
     tx.oncomplete = () => resolve();
     tx.onerror    = () => reject(tx.error);
+  });
+}
+
+// ─── IndexedDB helpers for persisting individual recording file handles ────────
+// Stores FileSystemFileHandle references keyed by filename so the library can
+// offer playback of past recordings without requiring directory re-selection.
+const IDB_REC_DB_NAME = 'slalom-stream-recordings';
+const IDB_REC_STORE   = 'files';
+
+const IDB_REC_MARKERS_STORE = 'markers';
+
+function openRecordingsDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_REC_DB_NAME, 2);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_REC_STORE)) {
+        db.createObjectStore(IDB_REC_STORE);
+      }
+      if (!db.objectStoreNames.contains(IDB_REC_MARKERS_STORE)) {
+        db.createObjectStore(IDB_REC_MARKERS_STORE);
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror   = () => reject(req.error);
+  });
+}
+
+async function idbRegisterRecordingHandle(filename: string, handle: FileSystemFileHandle): Promise<void> {
+  try {
+    const db = await openRecordingsDB();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(IDB_REC_STORE, 'readwrite');
+      tx.objectStore(IDB_REC_STORE).put(handle, filename);
+      tx.oncomplete = () => resolve();
+      tx.onerror    = () => reject(tx.error);
+    });
+  } catch { /* non-critical — library scan still works via dir handle */ }
+}
+
+async function idbStoreMarkerData(filename: string, markers: MarkerMs[]): Promise<void> {
+  try {
+    const db = await openRecordingsDB();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(IDB_REC_MARKERS_STORE, 'readwrite');
+      tx.objectStore(IDB_REC_MARKERS_STORE).put(markers, filename);
+      tx.oncomplete = () => resolve();
+      tx.onerror    = () => reject(tx.error);
+    });
+  } catch { /* non-critical */ }
+}
+
+async function idbGetMarkerData(filename: string): Promise<MarkerMs[]> {
+  try {
+    const db = await openRecordingsDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_REC_MARKERS_STORE, 'readonly');
+      const req = tx.objectStore(IDB_REC_MARKERS_STORE).get(filename);
+      req.onsuccess = () => resolve((req.result as MarkerMs[] | undefined) ?? []);
+      req.onerror   = () => reject(req.error);
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function idbGetMarkerFilenames(): Promise<Set<string>> {
+  try {
+    const db = await openRecordingsDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_REC_MARKERS_STORE, 'readonly');
+      const store = tx.objectStore(IDB_REC_MARKERS_STORE);
+      const names = new Set<string>();
+      const cursorReq = store.openKeyCursor();
+      cursorReq.onsuccess = () => {
+        const cursor = cursorReq.result;
+        if (cursor) { names.add(cursor.key as string); cursor.continue(); }
+        else resolve(names);
+      };
+      cursorReq.onerror = () => reject(cursorReq.error);
+    });
+  } catch {
+    return new Set<string>();
+  }
+}
+
+interface RecordingHandleEntry { filename: string; handle: FileSystemFileHandle }
+
+async function idbGetAllRecordingHandles(): Promise<RecordingHandleEntry[]> {
+  const db = await openRecordingsDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_REC_STORE, 'readonly');
+    const store = tx.objectStore(IDB_REC_STORE);
+    const results: RecordingHandleEntry[] = [];
+    const cursorReq = store.openCursor();
+    cursorReq.onsuccess = () => {
+      const cursor = cursorReq.result;
+      if (cursor) {
+        results.push({ filename: cursor.key as string, handle: cursor.value as FileSystemFileHandle });
+        cursor.continue();
+      } else {
+        resolve(results);
+      }
+    };
+    cursorReq.onerror = () => reject(cursorReq.error);
   });
 }
 
@@ -253,6 +358,7 @@ function useSaveFolders(): SaveFolders {
           const writable = await fh.createWritable();
           await writable.write(blob);
           await writable.close();
+          void idbRegisterRecordingHandle(filename, fh);
           return true;
         } catch { return false; }
       };
@@ -732,6 +838,8 @@ function useVideoRecorder() {
     folderSave?: ((blob: Blob, filename: string) => Promise<{ savedPrimary: boolean; savedBackup: boolean }>) | null;
     primaryPath?: string | null;
     backupPath?: string | null;
+    primaryHandle?: FileSystemDirectoryHandle | null;
+    backupHandle?: FileSystemDirectoryHandle | null;
     markersToSave?: MarkerMs[];
   } = {}) => {
     const filename = opts.filename ?? replayFilename ?? `slalom-${Date.now()}.webm`;
@@ -799,10 +907,22 @@ function useVideoRecorder() {
             const markerPath = `${dir}${sep}${markersFilename}`;
             await tauriInvoke('write_text_file', { path: markerPath, content: markerData }).catch(() => {});
           }
+        } else {
+          // Browser mode: persist marker timestamps in IndexedDB so the library
+          // can load them when replaying a saved recording.
+          void idbStoreMarkerData(filename, opts.markersToSave);
+
+          // Also write a .markers.json sidecar to configured directory handles if available.
+          const markerBlob = new Blob([markerData], { type: 'application/json' });
+          for (const dir of [opts.primaryHandle, opts.backupHandle].filter(Boolean) as FileSystemDirectoryHandle[]) {
+            try {
+              const mfh = await dir.getFileHandle(markersFilename, { create: true });
+              const writable = await mfh.createWritable();
+              await writable.write(markerBlob);
+              await writable.close();
+            } catch { /* non-critical */ }
+          }
         }
-        // In browser mode, the recording goes to the browser's Downloads folder
-        // via a <a download> trigger — there is no reliable path to write a sidecar
-        // alongside it, so browser-mode markers are embedded in the toast description only.
       }
     }
 
@@ -1091,9 +1211,11 @@ interface ReplayPlayerProps {
   onClose: () => void;
   onSave: () => void | Promise<void>;
   skierName?: string | null;
+  /** When true, hides the Save button (recording already on disk) */
+  readOnly?: boolean;
 }
 
-function ReplayPlayer({ replayUrl, filename, ffmpegSavedPath, markers, open, onClose, onSave, skierName }: ReplayPlayerProps) {
+function ReplayPlayer({ replayUrl, filename, ffmpegSavedPath, markers, open, onClose, onSave, skierName, readOnly }: ReplayPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
@@ -1556,6 +1678,58 @@ function ReplayPlayer({ replayUrl, filename, ffmpegSavedPath, markers, open, onC
               )}
             </div>
 
+            {/* Clip trim row */}
+            <div className="px-5 pb-4 flex items-center gap-2 shrink-0 flex-wrap border-t border-slate-700/40 pt-3">
+              <Scissors className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider mr-1">Trim Clip</span>
+              <button
+                onClick={() => { setTrimIn(currentTime); }}
+                title="Set trim in point to current position"
+                className={`flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg transition-colors shrink-0 ${
+                  trimIn !== null ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                [In {trimIn !== null ? fmtMs(trimIn * 1000) : '—'}
+              </button>
+              <button
+                onClick={() => { setTrimOut(currentTime); }}
+                title="Set trim out point to current position"
+                className={`flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg transition-colors shrink-0 ${
+                  trimOut !== null ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                Out] {trimOut !== null ? fmtMs(trimOut * 1000) : '—'}
+              </button>
+              {(trimIn !== null || trimOut !== null) && (
+                <button
+                  onClick={() => { setTrimIn(null); setTrimOut(null); }}
+                  title="Clear trim points"
+                  className="text-xs text-slate-500 hover:text-slate-300 px-1.5 py-1 rounded-lg hover:bg-white/5 transition-colors shrink-0"
+                >
+                  ✕ Clear
+                </button>
+              )}
+              {trimIn !== null && trimOut !== null && trimOut > trimIn && (
+                <span className="text-[10px] text-slate-500 font-mono shrink-0">
+                  {fmtMs((trimOut - trimIn) * 1000)}
+                </span>
+              )}
+              <div className="flex-1" />
+              <button
+                onClick={exportClip}
+                disabled={trimIn === null || trimOut === null || trimOut <= trimIn || exporting}
+                title={trimIn === null || trimOut === null ? 'Set in and out points first' : 'Export clip to disk'}
+                className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors shrink-0 ${
+                  trimIn !== null && trimOut !== null && trimOut > trimIn && !exporting
+                    ? 'bg-cyan-600 hover:bg-cyan-500 text-white'
+                    : 'bg-white/5 text-slate-600 cursor-not-allowed'
+                }`}
+              >
+                <Scissors className="w-3.5 h-3.5" />
+                {exporting ? 'Exporting…' : 'Export Clip'}
+              </button>
+            </div>
+
             {/* Markers legend + Save */}
             <div className="flex items-center gap-3">
               {markers.length > 0 && (
@@ -1572,65 +1746,461 @@ function ReplayPlayer({ replayUrl, filename, ffmpegSavedPath, markers, open, onC
                   ))}
                 </div>
               )}
+              {readOnly ? (
+                <button
+                  onClick={onClose}
+                  className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-white font-bold px-4 py-2 rounded-xl text-sm transition-colors shrink-0"
+                >
+                  <X className="w-4 h-4" /> Close
+                </button>
+              ) : (
+                <button
+                  onClick={onSave}
+                  className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-xl text-sm transition-colors shrink-0"
+                >
+                  <Download className="w-4 h-4" /> Save Recording
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── Recording filename parser ────────────────────────────────────────────────
+// Filename format: {SkierName}-{Division}-{N}m-{YYYY-MM-DDTHH-MM-SS}.{ext}
+// or: slalom-{YYYY-MM-DDTHH-MM-SS}.{ext} when no skier/division/rope.
+//
+// Divisions (from DIVISIONS constant) are space-separated words stored with
+// dashes in the filename, e.g. "Open Men" → "Open-Men". We try to match the
+// last 1 or 2 dash-parts of the prefix against known division patterns.
+
+const DIVISION_FILENAME_PATTERNS = new Set(
+  DIVISIONS.map(d => d.replace(/\s+/g, '-')),
+);
+
+function splitPrefixNameDivision(prefix: string): { skierName: string; division: string | null } {
+  const parts = prefix.split('-');
+  // Try 2-word division last (e.g. "Open-Men")
+  if (parts.length >= 3) {
+    const div2 = `${parts[parts.length - 2]}-${parts[parts.length - 1]}`;
+    if (DIVISION_FILENAME_PATTERNS.has(div2)) {
+      return {
+        skierName: parts.slice(0, -2).join(' ').trim() || prefix,
+        division: div2.replace(/-/g, ' '),
+      };
+    }
+  }
+  // Try 1-word division last (e.g. "Amateur")
+  if (parts.length >= 2) {
+    const div1 = parts[parts.length - 1];
+    if (DIVISION_FILENAME_PATTERNS.has(div1)) {
+      return {
+        skierName: parts.slice(0, -1).join(' ').trim() || prefix,
+        division: div1,
+      };
+    }
+  }
+  return { skierName: parts.join(' ').trim() || prefix, division: null };
+}
+
+function parseRecordingFilename(filename: string): {
+  skierName: string;
+  division: string | null;
+  rope: number | null;
+  timestamp: Date | null;
+} {
+  const base = filename.replace(/\.(mp4|webm)$/i, '');
+  // With rope: {prefix}-{N}m-{timestamp}
+  // Rope segment may be integer (16m) or decimal (18.25m, 14.25m, 11.25m).
+  const withRope = base.match(/^(.*)-([0-9]+(?:\.[0-9]+)?)m-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})$/);
+  if (withRope) {
+    const isoStr = withRope[3].replace(/T(\d{2})-(\d{2})-(\d{2})$/, 'T$1:$2:$3');
+    const { skierName, division } = splitPrefixNameDivision(withRope[1]);
+    return { skierName, division, rope: Number(withRope[2]), timestamp: new Date(isoStr) };
+  }
+  // Without rope: {prefix}-{timestamp}
+  const noRope = base.match(/^(.*)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})$/);
+  if (noRope) {
+    const isoStr = noRope[2].replace(/T(\d{2})-(\d{2})-(\d{2})$/, 'T$1:$2:$3');
+    const { skierName, division } = splitPrefixNameDivision(noRope[1]);
+    return { skierName, division, rope: null, timestamp: new Date(isoStr) };
+  }
+  return { skierName: base, division: null, rope: null, timestamp: null };
+}
+
+// ─── Recording Library ────────────────────────────────────────────────────────
+
+interface LibraryEntry {
+  id: string;
+  filename: string;
+  path: string | null;
+  hasMarkers: boolean;
+  sizeBytes: number;
+  modifiedMs: number;
+  skierName: string;
+  division: string | null;
+  rope: number | null;
+  timestamp: Date | null;
+  fileHandle?: FileSystemFileHandle;
+}
+
+interface RecordingLibraryProps {
+  open: boolean;
+  onClose: () => void;
+  primaryPath: string | null;
+  backupPath: string | null;
+  primaryHandle: FileSystemDirectoryHandle | null;
+  backupHandle: FileSystemDirectoryHandle | null;
+  onOpenReplay: (opts: {
+    url: string;
+    filename: string;
+    markers: MarkerMs[];
+    skierName: string | null;
+  }) => void;
+}
+
+interface MarkerRecord { index: number; elapsed_ms: number; label: string }
+
+function RecordingLibrary({
+  open,
+  onClose,
+  primaryPath,
+  backupPath,
+  primaryHandle,
+  backupHandle,
+  onOpenReplay,
+}: RecordingLibraryProps) {
+  const [entries, setEntries] = useState<LibraryEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [openingId, setOpeningId] = useState<string | null>(null);
+
+  const fmtSize = (bytes: number) => {
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  };
+
+  const loadEntries = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const all: LibraryEntry[] = [];
+      const seen = new Set<string>();
+
+      if (isTauri) {
+        // Tauri: read from disk via Rust list_recordings command
+        interface RawEntry { path: string; filename: string; has_markers: boolean; size_bytes: number; modified_secs: number }
+        for (const folder of ([primaryPath, backupPath].filter(Boolean) as string[])) {
+          try {
+            const raw = await tauriInvoke<RawEntry[]>('list_recordings', { folder });
+            for (const r of raw) {
+              if (seen.has(r.filename)) continue;
+              seen.add(r.filename);
+              const parsed = parseRecordingFilename(r.filename);
+              all.push({
+                id: r.path,
+                filename: r.filename,
+                path: r.path,
+                hasMarkers: r.has_markers,
+                sizeBytes: r.size_bytes,
+                modifiedMs: r.modified_secs * 1000,
+                ...parsed,
+              });
+            }
+          } catch { /* folder may not be accessible */ }
+        }
+      } else {
+        // Browser: load from IndexedDB-bookmarked FileSystemFileHandles + marker data
+        const [idbHandles, markerFilenames] = await Promise.all([
+          idbGetAllRecordingHandles().catch(() => [] as RecordingHandleEntry[]),
+          idbGetMarkerFilenames().catch(() => new Set<string>()),
+        ]);
+
+        for (const { filename, handle } of idbHandles) {
+          if (seen.has(filename)) continue;
+          try {
+            const file = await handle.getFile();
+            const ext = filename.split('.').pop()?.toLowerCase();
+            if (ext !== 'mp4' && ext !== 'webm') continue;
+            seen.add(filename);
+            const parsed = parseRecordingFilename(filename);
+            all.push({
+              id: filename,
+              filename,
+              path: null,
+              hasMarkers: markerFilenames.has(filename),
+              sizeBytes: file.size,
+              modifiedMs: file.lastModified,
+              fileHandle: handle,
+              ...parsed,
+            });
+          } catch { /* handle stale / access revoked */ }
+        }
+
+        // Fallback: scan configured directory handles for recordings not yet bookmarked
+        interface FSDirHandleWithPermission extends FileSystemDirectoryHandle {
+          requestPermission(descriptor?: { mode?: string }): Promise<PermissionState>;
+        }
+        for (const handle of ([primaryHandle, backupHandle].filter(Boolean) as FileSystemDirectoryHandle[])) {
+          try {
+            if ('requestPermission' in handle) {
+              const perm = await (handle as FSDirHandleWithPermission).requestPermission({ mode: 'read' });
+              if (perm !== 'granted') continue;
+            }
+            for await (const fh of handle.values()) {
+              const name = fh.name;
+              if (fh.kind !== 'file') continue;
+              const ext = name.split('.').pop()?.toLowerCase();
+              if (ext !== 'mp4' && ext !== 'webm') continue;
+              if (seen.has(name)) continue;
+              seen.add(name);
+              const fileHandle = fh as FileSystemFileHandle;
+              const file = await fileHandle.getFile();
+              const parsed = parseRecordingFilename(name);
+              // Check for .markers.json sidecar in directory when IDB doesn't have it
+              let hasMarkersForFile = markerFilenames.has(name);
+              if (!hasMarkersForFile) {
+                try {
+                  await handle.getFileHandle(name.replace(/\.[^.]+$/, '') + '.markers.json');
+                  hasMarkersForFile = true;
+                } catch { /* no sidecar */ }
+              }
+              all.push({
+                id: name,
+                filename: name,
+                path: null,
+                hasMarkers: hasMarkersForFile,
+                sizeBytes: file.size,
+                modifiedMs: file.lastModified,
+                fileHandle,
+                ...parsed,
+              });
+            }
+          } catch { /* no access */ }
+        }
+      }
+
+      all.sort((a, b) => b.modifiedMs - a.modifiedMs);
+      setEntries(all);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load recordings');
+    } finally {
+      setLoading(false);
+    }
+  }, [primaryPath, backupPath, primaryHandle, backupHandle]);
+
+  useEffect(() => {
+    if (open) { setSearch(''); loadEntries(); }
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const openEntry = async (entry: LibraryEntry) => {
+    setOpeningId(entry.id);
+    try {
+      let url: string;
+      let markers: MarkerMs[] = [];
+
+      if (isTauri && entry.path) {
+        url = tauriConvertFileSrc(entry.path);
+        if (entry.hasMarkers) {
+          const markerPath = entry.path.replace(/\.[^.]+$/, '') + '.markers.json';
+          try {
+            const json = await tauriInvoke<string>('read_text_file', { path: markerPath });
+            const data = JSON.parse(json) as { markers?: MarkerRecord[] };
+            markers = (data.markers ?? []).map(m => m.elapsed_ms);
+          } catch { /* markers file not accessible — proceed without markers */ }
+        }
+      } else if (entry.fileHandle) {
+        const file = await entry.fileHandle.getFile();
+        url = URL.createObjectURL(file);
+        if (entry.hasMarkers) {
+          // Primary source: IDB marker store
+          markers = await idbGetMarkerData(entry.filename);
+          // Fallback: read .markers.json sidecar from configured directory handles
+          if (markers.length === 0) {
+            const markerFilename = entry.filename.replace(/\.[^.]+$/, '') + '.markers.json';
+            for (const dir of ([primaryHandle, backupHandle].filter(Boolean) as FileSystemDirectoryHandle[])) {
+              try {
+                const mfh = await dir.getFileHandle(markerFilename);
+                const mfile = await mfh.getFile();
+                const json = await mfile.text();
+                const data = JSON.parse(json) as { markers?: MarkerRecord[] };
+                markers = (data.markers ?? []).map(m => m.elapsed_ms);
+                if (markers.length > 0) break;
+              } catch { /* sidecar not in this dir */ }
+            }
+          }
+        }
+      } else {
+        return;
+      }
+
+      onOpenReplay({ url, filename: entry.filename, markers, skierName: entry.skierName });
+      onClose();
+    } catch (err: unknown) {
+      setError(`Failed to open: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setOpeningId(null);
+    }
+  };
+
+  // In Tauri mode we need at least one configured path to scan the filesystem.
+  // In browser mode the IDB registry always works regardless of directory handle availability,
+  // so we never hide the library; the directory-handle fallback scan is best-effort only.
+  const noFolders = isTauri && !primaryPath && !backupPath;
+  const filtered = entries.filter(e =>
+    !search.trim() ||
+    e.filename.toLowerCase().includes(search.toLowerCase()) ||
+    e.skierName.toLowerCase().includes(search.toLowerCase()) ||
+    (e.division ?? '').toLowerCase().includes(search.toLowerCase()),
+  );
+
+  return (
+    <>
+      {open && (
+        <div className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm" onClick={onClose} />
+      )}
+      <div
+        className={`fixed bottom-0 left-0 right-0 z-50 transform transition-transform duration-300 ease-out ${open ? 'translate-y-0' : 'translate-y-full'}`}
+        style={{ maxHeight: '90vh' }}
+      >
+        <div className="bg-slate-900 border-t border-slate-700 rounded-t-3xl shadow-2xl flex flex-col" style={{ maxHeight: '90vh' }}>
+          {/* Header */}
+          <div className="flex items-center justify-between px-5 py-3 border-b border-slate-700/60 shrink-0">
+            <div className="flex items-center gap-3">
+              <Film className="w-5 h-5 text-purple-400 shrink-0" />
+              <div>
+                <p className="font-bold text-white text-sm leading-tight">Recording Library</p>
+                <p className="text-slate-400 text-xs">
+                  {loading ? 'Loading…' : `${entries.length} recording${entries.length !== 1 ? 's' : ''}`}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
               <button
-                onClick={onSave}
-                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-xl text-sm transition-colors shrink-0"
+                onClick={loadEntries}
+                disabled={loading}
+                className="text-slate-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/10 disabled:opacity-50"
+                title="Refresh"
               >
-                <Download className="w-4 h-4" /> Save Recording
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              </button>
+              <button
+                onClick={onClose}
+                className="text-slate-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/10"
+              >
+                <X className="w-5 h-5" />
               </button>
             </div>
           </div>
 
-          {/* Clip trim row */}
-          <div className="px-5 pb-4 flex items-center gap-2 shrink-0 flex-wrap border-t border-slate-700/40 pt-3">
-            <Scissors className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-            <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider mr-1">Trim Clip</span>
-            <button
-              onClick={() => { setTrimIn(currentTime); }}
-              title="Set trim in point to current position"
-              className={`flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg transition-colors shrink-0 ${
-                trimIn !== null ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10'
-              }`}
-            >
-              [In {trimIn !== null ? fmtMs(trimIn * 1000) : '—'}
-            </button>
-            <button
-              onClick={() => { setTrimOut(currentTime); }}
-              title="Set trim out point to current position"
-              className={`flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg transition-colors shrink-0 ${
-                trimOut !== null ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10'
-              }`}
-            >
-              Out] {trimOut !== null ? fmtMs(trimOut * 1000) : '—'}
-            </button>
-            {(trimIn !== null || trimOut !== null) && (
-              <button
-                onClick={() => { setTrimIn(null); setTrimOut(null); }}
-                title="Clear trim points"
-                className="text-xs text-slate-500 hover:text-slate-300 px-1.5 py-1 rounded-lg hover:bg-white/5 transition-colors shrink-0"
-              >
-                ✕ Clear
-              </button>
+          {/* Body */}
+          <div className="flex-1 overflow-y-auto min-h-0">
+            {noFolders ? (
+              <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
+                <FolderOpen className="w-10 h-10 text-slate-600 mb-3" />
+                <p className="text-slate-300 font-semibold text-sm mb-1">No save folder configured</p>
+                <p className="text-slate-500 text-xs">
+                  Set up a Primary or Backup save folder in the Storage panel to browse recordings here.
+                </p>
+              </div>
+            ) : loading && entries.length === 0 ? (
+              <div className="flex items-center justify-center py-16">
+                <RefreshCw className="w-6 h-6 text-slate-500 animate-spin" />
+              </div>
+            ) : (
+              <>
+                {/* Search */}
+                <div className="px-4 py-3 border-b border-slate-800 shrink-0">
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
+                    <input
+                      type="text"
+                      placeholder="Search by skier name or division…"
+                      value={search}
+                      onChange={e => setSearch(e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-slate-500"
+                    />
+                  </div>
+                </div>
+
+                {error && (
+                  <div className="mx-4 mt-3 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-xs flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{error}</span>
+                  </div>
+                )}
+
+                {filtered.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 px-6 text-center">
+                    <Film className="w-8 h-8 text-slate-600 mb-2" />
+                    <p className="text-slate-400 text-sm">
+                      {search ? 'No recordings match your search.' : 'No recordings found in the configured folder.'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-800/60">
+                    {filtered.map(entry => {
+                      const rc = entry.rope ? getRopeColour(entry.rope) : null;
+                      const isOpening = openingId === entry.id;
+                      return (
+                        <button
+                          key={entry.id}
+                          onClick={() => openEntry(entry)}
+                          disabled={!!openingId}
+                          className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-800/60 transition-colors text-left group disabled:opacity-60"
+                        >
+                          <div className="w-8 h-8 rounded-lg bg-slate-800 group-hover:bg-slate-700 flex items-center justify-center shrink-0 transition-colors border border-slate-700/60">
+                            {isOpening
+                              ? <RefreshCw className="w-3.5 h-3.5 text-purple-400 animate-spin" />
+                              : <Play className="w-3.5 h-3.5 text-slate-300 fill-slate-300 ml-0.5" />
+                            }
+                          </div>
+
+                          <div className="flex-1 min-w-0">
+                            {/* Skier name + division + rope badge */}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-semibold text-sm text-white truncate">{entry.skierName}</span>
+                              {entry.division && (
+                                <span className="text-[10px] font-bold text-slate-400 bg-slate-700 border border-slate-600 px-1.5 py-0.5 rounded shrink-0">
+                                  {entry.division}
+                                </span>
+                              )}
+                              {rc && entry.rope && (
+                                <span
+                                  className="inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold shrink-0"
+                                  style={{ background: rc.bg, color: rc.text, borderColor: rc.border }}
+                                >
+                                  {entry.rope}m
+                                </span>
+                              )}
+                              {entry.hasMarkers && (
+                                <span className="text-[10px] font-bold text-emerald-400 bg-emerald-400/10 border border-emerald-400/20 px-1.5 py-0.5 rounded shrink-0">
+                                  markers
+                                </span>
+                              )}
+                            </div>
+                            {/* Timestamp + size */}
+                            <p className="text-slate-500 text-[11px] mt-0.5 truncate">
+                              {entry.timestamp
+                                ? entry.timestamp.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+                                : entry.filename}
+                              {entry.sizeBytes > 0 && ` · ${fmtSize(entry.sizeBytes)}`}
+                            </p>
+                          </div>
+
+                          <MonitorPlay className="w-4 h-4 text-slate-600 group-hover:text-purple-400 transition-colors shrink-0" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
-            {trimIn !== null && trimOut !== null && trimOut > trimIn && (
-              <span className="text-[10px] text-slate-500 font-mono shrink-0">
-                {fmtMs((trimOut - trimIn) * 1000)}
-              </span>
-            )}
-            <div className="flex-1" />
-            <button
-              onClick={exportClip}
-              disabled={trimIn === null || trimOut === null || trimOut <= trimIn || exporting}
-              title={trimIn === null || trimOut === null ? 'Set in and out points first' : 'Export clip to disk'}
-              className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors shrink-0 ${
-                trimIn !== null && trimOut !== null && trimOut > trimIn && !exporting
-                  ? 'bg-cyan-600 hover:bg-cyan-500 text-white'
-                  : 'bg-white/5 text-slate-600 cursor-not-allowed'
-              }`}
-            >
-              <Scissors className="w-3.5 h-3.5" />
-              {exporting ? 'Exporting…' : 'Export Clip'}
-            </button>
           </div>
         </div>
       </div>
@@ -1970,6 +2540,15 @@ export default function Recording() {
   const [addSkierForm, setAddSkierForm] = useState({ first_name: '', surname: '', division: DIVISIONS[0] });
   const [addSkierError, setAddSkierError] = useState<string | null>(null);
   const [pbCallout, setPbCallout] = useState<{ skierName: string; score: number } | null>(null);
+  const [showLibrary, setShowLibrary] = useState(false);
+  const [libraryReplay, setLibraryReplay] = useState<{
+    url: string; filename: string; markers: MarkerMs[]; skierName: string | null;
+  } | null>(null);
+  useEffect(() => {
+    const url = libraryReplay?.url;
+    return () => { if (url) URL.revokeObjectURL(url); };
+  }, [libraryReplay?.url]);
+
   // 'initial' sentinel prevents a PB callout for passes that were already in the DB when the page loads
   const lastCheckedPassIdRef = useRef<number | 'initial' | null>('initial');
 
@@ -2215,6 +2794,15 @@ export default function Recording() {
               title="Open fullscreen live view in a new window — drag to a second monitor"
             >
               <Monitor className="w-3.5 h-3.5" /> Live View
+            </button>
+
+            {/* Recording library */}
+            <button
+              onClick={() => setShowLibrary(true)}
+              className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+              title="Browse and replay saved recordings"
+            >
+              <Film className="w-3.5 h-3.5" /> Library
             </button>
           </div>
         }
@@ -2544,6 +3132,29 @@ export default function Recording() {
         <DisputeModal passId={disputePassId} onClose={() => setDisputePassId(null)} />
       )}
 
+      {/* Recording library panel */}
+      <RecordingLibrary
+        open={showLibrary}
+        onClose={() => setShowLibrary(false)}
+        primaryPath={folders.primaryPath}
+        backupPath={folders.backupPath}
+        primaryHandle={folders.primaryHandle}
+        backupHandle={folders.backupHandle}
+        onOpenReplay={opts => setLibraryReplay(opts)}
+      />
+
+      {/* Library replay player */}
+      <ReplayPlayer
+        replayUrl={libraryReplay?.url ?? null}
+        filename={libraryReplay?.filename ?? null}
+        markers={libraryReplay?.markers ?? []}
+        open={!!libraryReplay}
+        onClose={() => setLibraryReplay(null)}
+        onSave={async () => { /* already saved */ }}
+        skierName={libraryReplay?.skierName ?? null}
+        readOnly
+      />
+
       {/* Enhanced replay player — portal-style, appears over everything */}
       <ReplayPlayer
         replayUrl={video.replayUrl}
@@ -2574,6 +3185,8 @@ export default function Recording() {
             folderSave: hasFolders ? folders.saveToFolders : null,
             primaryPath: folders.primaryPath,
             backupPath: folders.backupPath,
+            primaryHandle: folders.primaryHandle,
+            backupHandle: folders.backupHandle,
             markersToSave: video.markers,
           });
           if (savedPrimary || savedBackup) {

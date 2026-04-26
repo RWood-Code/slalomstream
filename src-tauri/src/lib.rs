@@ -297,6 +297,89 @@ fn check_path_accessible(path: String) -> bool {
     std::path::Path::new(&path).exists()
 }
 
+// ─── File reading ─────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn read_text_file(path: String) -> Result<String, String> {
+    // Restrict to .markers.json sidecars only to limit filesystem exposure.
+    if !path.ends_with(".markers.json") {
+        return Err("read_text_file is restricted to .markers.json files".to_string());
+    }
+    std::fs::read_to_string(&path).map_err(|e| format!("Read error: {e}"))
+}
+
+// ─── Recording library ────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+struct RecordingEntry {
+    path: String,
+    filename: String,
+    has_markers: bool,
+    size_bytes: u64,
+    modified_secs: u64,
+}
+
+#[tauri::command]
+fn list_recordings(folder: String) -> Result<Vec<RecordingEntry>, String> {
+    let dir = std::path::Path::new(&folder);
+    if !dir.is_dir() {
+        return Ok(vec![]);
+    }
+
+    let read_dir =
+        std::fs::read_dir(dir).map_err(|e| format!("Cannot read directory: {e}"))?;
+
+    let mut entries: Vec<RecordingEntry> = Vec::new();
+
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        if ext != "mp4" && ext != "webm" {
+            continue;
+        }
+
+        let filename = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        let meta = entry.metadata().ok();
+        let size_bytes = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+        let modified_secs = meta
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&filename)
+            .to_string();
+        let markers_path = dir.join(format!("{}.markers.json", stem));
+        let has_markers = markers_path.exists();
+
+        entries.push(RecordingEntry {
+            path: path.to_string_lossy().to_string(),
+            filename,
+            has_markers,
+            size_bytes,
+            modified_secs,
+        });
+    }
+
+    entries.sort_by(|a, b| b.modified_secs.cmp(&a.modified_secs));
+
+    Ok(entries)
+}
+
 // ─── File writing ─────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -1194,9 +1277,11 @@ pub fn run() {
             set_folder_config,
             get_disk_space,
             check_path_accessible,
+            read_text_file,
             write_text_file,
             write_binary_file,
             copy_file,
+            list_recordings,
             list_video_devices,
             list_audio_devices,
             start_ffmpeg_recording,
