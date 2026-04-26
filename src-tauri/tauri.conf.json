@@ -81,10 +81,10 @@
     "updater": {
       "active": true,
       "endpoints": [
-        "https://github.com/nztwsa/slalomstream/releases/latest/download/update.json"
+        "https://github.com/RWood-Code/slalomstream/releases/latest/download/update.json"
       ],
       "dialog": false,
-      "pubkey": "PLACEHOLDER_REPLACE_ME"
+      "pubkey": "PLACEHOLDER_REPLACE_IN_CI"
     }
   }
 }
