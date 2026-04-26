@@ -1,9 +1,48 @@
+# =============================================================================
+# SlalomStream — Tauri desktop build (Windows + macOS)
+#
+# Triggers:
+#   - Push of a `v*` tag (e.g. `v2.1.0`) → cuts a full signed release
+#   - Manual dispatch (workflow_dispatch) → for test builds, with optional
+#     unsigned bypass so the pipeline can be validated before certs are set up
+#
+# Required GitHub Secrets (Settings → Secrets and variables → Actions):
+#
+#   Tauri updater signing (REQUIRED — build will fail without these):
+#     TAURI_SIGNING_PRIVATE_KEY          — ed25519 private key (from `pnpm tauri signer generate`)
+#     TAURI_SIGNING_PRIVATE_KEY_PASSWORD — passphrase for the private key
+#     TAURI_SIGNING_PUBLIC_KEY           — matching public key (injected into tauri.conf.json)
+#
+#   macOS code signing (optional — unsigned build produced if absent):
+#     APPLE_CERTIFICATE                  — base64-encoded .p12 certificate
+#     APPLE_CERTIFICATE_PASSWORD         — .p12 password
+#     APPLE_SIGNING_IDENTITY             — e.g. "Developer ID Application: Your Name (TEAMID)"
+#     APPLE_ID                           — Apple ID email for notarisation
+#     APPLE_PASSWORD                     — App-specific password for notarisation
+#     APPLE_TEAM_ID                      — Apple Developer Team ID
+#
+#   Windows code signing (optional — unsigned build produced if absent):
+#     WINDOWS_CERTIFICATE                — base64-encoded .pfx certificate
+#     WINDOWS_CERTIFICATE_PASSWORD       — .pfx password
+#
+# To generate Tauri signing keys (run once, locally):
+#   pnpm tauri signer generate
+# Copy the output into GitHub Secrets as described above.
+# =============================================================================
+
 name: Tauri Build
 
 on:
+  workflow_dispatch:
+    inputs:
+      unsigned:
+        description: "Build UNSIGNED test installer (no code-signing certs required — for pipeline testing only, DO NOT distribute)"
+        type: boolean
+        required: false
+        default: false
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 jobs:
   build-tauri:
@@ -15,13 +54,13 @@ jobs:
         include:
           - platform: macos-latest
             target: aarch64-apple-darwin
-            args: '--target aarch64-apple-darwin'
+            args: "--target aarch64-apple-darwin"
           - platform: macos-13
             target: x86_64-apple-darwin
-            args: '--target x86_64-apple-darwin'
+            args: "--target x86_64-apple-darwin"
           - platform: windows-latest
-            target: ''
-            args: ''
+            target: ""
+            args: ""
 
     runs-on: ${{ matrix.platform }}
 
@@ -31,7 +70,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -41,7 +80,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: "./src-tauri -> target"
           key: ${{ matrix.target || 'default' }}-${{ hashFiles('src-tauri/Cargo.toml') }}
 
       - name: Install pnpm
@@ -58,28 +97,54 @@ jobs:
       - name: Download cloudflared sidecar
         run: node scripts/download-cloudflared.mjs ${{ matrix.target }}
 
+      # ── Tauri updater signing key ─────────────────────────────────────────
+      # The public key is injected into tauri.conf.json at build time.
+      # On unsigned test builds (workflow_dispatch with unsigned=true), we
+      # generate a throwaway keypair so the build completes without needing
+      # real secrets configured.
       - name: Inject updater public key
         shell: bash
         env:
           TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+          ALLOW_UNSIGNED: ${{ inputs.unsigned == true && '1' || '' }}
         run: |
-          if [[ -z "$TAURI_SIGNING_PUBLIC_KEY" ]]; then
+          if [[ -n "$TAURI_SIGNING_PUBLIC_KEY" ]]; then
+            echo "Injecting TAURI_SIGNING_PUBLIC_KEY into tauri.conf.json"
+            node -e "
+              const fs = require('fs');
+              const cfg = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+              cfg.plugins.updater.pubkey = process.env.TAURI_SIGNING_PUBLIC_KEY;
+              fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(cfg, null, 2));
+              console.log('Updater public key injected.');
+            "
+          elif [[ -n "$ALLOW_UNSIGNED" ]]; then
+            echo "::warning::TAURI_SIGNING_PUBLIC_KEY not set — generating throwaway keypair for unsigned test build."
+            # Generate a throwaway keypair. The resulting installer will not verify
+            # updates correctly and MUST NOT be distributed to users.
+            THROWAWAY=$(pnpm tauri signer generate --ci 2>&1 || true)
+            PUBKEY=$(echo "$THROWAWAY" | grep -oP 'Public key:?\s*\K\S+' | head -1 || echo "")
+            PRIVKEY=$(echo "$THROWAWAY" | grep -oP 'Private key:?\s*\K\S+' | head -1 || echo "")
+            if [[ -z "$PUBKEY" ]]; then
+              # Fallback: patch in a dummy valid-format key so Tauri doesn't error
+              PUBKEY="dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkKUlVRd0FBQT0K"
+              PRIVKEY="dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHNlY3JldCBrZXkKUlVRd0FBQT0K"
+            fi
+            node -e "
+              const fs = require('fs');
+              const cfg = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+              cfg.plugins.updater.pubkey = process.env.PUBKEY || 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkKUlVRd0FBQT0K';
+              fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(cfg, null, 2));
+              console.log('Throwaway public key injected for unsigned test build.');
+            "
+            echo "TAURI_SIGNING_PRIVATE_KEY=$PRIVKEY" >> "$GITHUB_ENV"
+          else
             echo "ERROR: TAURI_SIGNING_PUBLIC_KEY secret is not configured."
+            echo "To fix: run 'pnpm tauri signer generate' locally and add the output to GitHub Secrets."
+            echo "For a test build without signing, use 'Run workflow' and tick 'Build UNSIGNED test installer'."
             exit 1
           fi
-          node -e "
-            const fs = require('fs');
-            const cfg = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
-            cfg.plugins.updater.pubkey = process.env.TAURI_SIGNING_PUBLIC_KEY;
-            fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(cfg, null, 2));
-            console.log('Updater public key injected into tauri.conf.json');
-          "
 
       # ── macOS code signing ────────────────────────────────────────────────
-      # When APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD are not set,
-      # the step warns and continues — producing an unsigned build that still
-      # works for internal distribution. Set the secrets to enable signing.
-
       - name: Import Apple Developer certificate
         if: runner.os == 'macOS'
         continue-on-error: true
@@ -113,9 +178,6 @@ jobs:
         if: runner.os == 'macOS' && env.APPLE_SIGNING_SKIPPED != 'true'
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         shell: bash
         run: |
           if [[ -z "$APPLE_SIGNING_IDENTITY" ]]; then
@@ -131,9 +193,6 @@ jobs:
           "
 
       # ── Windows code signing ──────────────────────────────────────────────
-      # When WINDOWS_CERTIFICATE / WINDOWS_CERTIFICATE_PASSWORD are not set,
-      # the step warns and continues — producing an unsigned build.
-
       - name: Import Windows Authenticode certificate
         if: runner.os == 'Windows'
         continue-on-error: true
@@ -189,13 +248,12 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'SlalomStream ${{ github.ref_name }}'
+          releaseName: "SlalomStream ${{ github.ref_name }}"
           releaseBody: |
             See [RELEASES.md](https://github.com/${{ github.repository }}/blob/main/RELEASES.md) for full release notes.
           releaseDraft: false
-          prerelease: false
+          prerelease: ${{ inputs.unsigned == true }}
           args: ${{ matrix.args }}
-
 
       - name: Show Tauri build error detail
         if: failure()
@@ -206,6 +264,7 @@ jobs:
           else
             echo 'No error detail file found.'
           fi
+
       - name: Remove temporary build keychain
         if: runner.os == 'macOS' && always()
         shell: bash
@@ -215,6 +274,8 @@ jobs:
   publish-update-manifest:
     name: Publish update.json manifest
     needs: build-tauri
+    # Only run on real tag pushes — unsigned test builds don't publish updates
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
