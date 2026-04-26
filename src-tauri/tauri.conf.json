@@ -57,7 +57,13 @@
       "exceptionDomain": "",
       "signingIdentity": null,
       "providerShortName": null,
-      "entitlements": null
+      "entitlements": null,
+      "dmg": {
+        "background": "dmg-background.png",
+        "windowSize": { "width": 800, "height": 400 },
+        "appPosition": { "x": 190, "y": 195 },
+        "applicationFolderPosition": { "x": 615, "y": 195 }
+      }
     }
   },
   "plugins": {

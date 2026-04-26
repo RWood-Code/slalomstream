@@ -1,5 +1,10 @@
 uploads = []
-generated = []
+
+[[generated]]
+id = "8AlRdHLj9s-qHsjxmZuQN"
+uri = "file://attached_assets/generated_images/dmg-background-raw.png"
+type = "image"
+title = "generated_image"
 
 [[outputs]]
 id = "plh37NNtr_fe60mAKkgyG"
