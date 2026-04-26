@@ -13,7 +13,7 @@ import {
   Clock, Flag, AlertTriangle, FileSearch, UserPlus, Trophy,
   Mic, MicOff, BookmarkPlus, SkipBack, SkipForward,
   ChevronLeft, ChevronRight, Repeat, HardDrive, WifiOff,
-  Video,
+  Video, Scissors,
 } from 'lucide-react';
 import { ROPE_LENGTHS, SPEEDS, VALID_IWWF_SCORES, DIVISIONS, formatRope, formatSpeed, getRopeColour, getJudgingPanel, suggestNextRope } from '@/lib/utils';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
@@ -1084,6 +1084,7 @@ const FRAME_MS = 1000 / 60; // 60fps frame step — matches target recording fra
 interface ReplayPlayerProps {
   replayUrl: string | null;
   filename: string | null;
+  ffmpegSavedPath?: string | null;
   markers: MarkerMs[];
   open: boolean;
   onClose: () => void;
@@ -1091,9 +1092,10 @@ interface ReplayPlayerProps {
   skierName?: string | null;
 }
 
-function ReplayPlayer({ replayUrl, filename, markers, open, onClose, onSave, skierName }: ReplayPlayerProps) {
+function ReplayPlayer({ replayUrl, filename, ffmpegSavedPath, markers, open, onClose, onSave, skierName }: ReplayPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
+  const { toast } = useToast();
   const [rate, setRate] = useState(1);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -1101,6 +1103,9 @@ function ReplayPlayer({ replayUrl, filename, markers, open, onClose, onSave, ski
   const [loopA, setLoopA] = useState<number | null>(null);
   const [loopB, setLoopB] = useState<number | null>(null);
   const [loopActive, setLoopActive] = useState(false);
+  const [trimIn, setTrimIn] = useState<number | null>(null);
+  const [trimOut, setTrimOut] = useState<number | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     if (!open || !replayUrl || !videoRef.current) return;
@@ -1113,6 +1118,9 @@ function ReplayPlayer({ replayUrl, filename, markers, open, onClose, onSave, ski
     setLoopA(null);
     setLoopB(null);
     setLoopActive(false);
+    setTrimIn(null);
+    setTrimOut(null);
+    setExporting(false);
   }, [open, replayUrl]);
 
   const handleTimeUpdate = () => {
@@ -1209,6 +1217,120 @@ function ReplayPlayer({ replayUrl, filename, markers, open, onClose, onSave, ski
 
   const progress = duration > 0 ? currentTime / duration : 0;
 
+  const exportClip = async () => {
+    if (trimIn === null || trimOut === null || trimOut <= trimIn) return;
+    setExporting(true);
+    try {
+      // Build clip-relative marker array (filtered to range, elapsed_ms offset by trimIn)
+      const trimInMs = Math.round(trimIn * 1000);
+      const trimOutMs = Math.round(trimOut * 1000);
+      const clippedMarkers = markers
+        .filter(ms => ms >= trimInMs && ms <= trimOutMs)
+        .map((ms, i) => ({ index: i, elapsed_ms: ms - trimInMs, label: `Marker ${i + 1}` }));
+
+      if (isTauri && ffmpegSavedPath) {
+        // Tauri / FFmpeg mode: shell out to ffmpeg for a fast stream-copy trim
+        const dotIdx = ffmpegSavedPath.lastIndexOf('.');
+        const stem = dotIdx > 0 ? ffmpegSavedPath.slice(0, dotIdx) : ffmpegSavedPath;
+        const ext  = dotIdx > 0 ? ffmpegSavedPath.slice(dotIdx)    : '.mp4';
+        const clipPath = `${stem}_clip${ext}`;
+        const clipFilename = clipPath.split(/[\\/]/).pop() ?? clipPath;
+
+        await tauriInvoke('trim_video', {
+          input_path: ffmpegSavedPath,
+          output_path: clipPath,
+          start_sec: trimIn,
+          end_sec: trimOut,
+        });
+
+        // Write markers sidecar using the same schema as the main recording sidecar
+        const markerData = JSON.stringify({
+          filename: clipFilename,
+          markers: clippedMarkers,
+        }, null, 2);
+        const markerPath = `${stem}_clip.markers.json`;
+        await tauriInvoke('write_text_file', {
+          path: markerPath,
+          content: markerData,
+        });
+
+        toast({
+          title: 'Clip exported',
+          description: `${clipFilename}${clippedMarkers.length > 0 ? ` + ${clippedMarkers.length} marker${clippedMarkers.length !== 1 ? 's' : ''}` : ''}`,
+        });
+      } else if (replayUrl && videoRef.current) {
+        // Browser mode: re-record the clip range in real time via captureStream + MediaRecorder
+        const vid = videoRef.current;
+        vid.pause();
+        vid.currentTime = trimIn;
+
+        const stream = (vid as HTMLVideoElement & { captureStream?: (fps?: number) => MediaStream }).captureStream?.(60);
+        if (!stream) {
+          toast({ title: 'Export not supported', description: 'captureStream API unavailable in this browser.', variant: 'destructive' });
+          setExporting(false);
+          return;
+        }
+
+        // Pick the best supported MIME type with fallback
+        const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+          .find(m => MediaRecorder.isTypeSupported(m)) ?? '';
+
+        const chunks: Blob[] = [];
+        const mr = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+        mr.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+
+        const clipBlob = await new Promise<Blob>((resolve, reject) => {
+          mr.onstop = () => resolve(new Blob(chunks, { type: mimeType || 'video/webm' }));
+          mr.onerror = reject;
+          mr.start();
+          vid.play();
+
+          const checkEnd = () => {
+            if (vid.currentTime >= trimOut) {
+              mr.stop();
+              vid.pause();
+            } else {
+              requestAnimationFrame(checkEnd);
+            }
+          };
+          requestAnimationFrame(checkEnd);
+        });
+
+        const baseName = (filename ?? `slalom-clip-${Date.now()}`).replace(/\.[^.]+$/, '');
+        const clipFilename = `${baseName}_clip.webm`;
+
+        // Download the video clip
+        const url = URL.createObjectURL(clipBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = clipFilename;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+        // Download the markers sidecar (same schema as Tauri/disk sidecar, always written for parity)
+        const markerData = JSON.stringify({
+          filename: clipFilename,
+          markers: clippedMarkers,
+        }, null, 2);
+        const markersBlob = new Blob([markerData], { type: 'application/json' });
+        const markersUrl = URL.createObjectURL(markersBlob);
+        const ma = document.createElement('a');
+        ma.href = markersUrl;
+        ma.download = `${baseName}_clip.markers.json`;
+        ma.click();
+        setTimeout(() => URL.revokeObjectURL(markersUrl), 5000);
+
+        toast({
+          title: 'Clip downloaded',
+          description: `${clipFilename}${clippedMarkers.length > 0 ? ` + ${clippedMarkers.length} marker${clippedMarkers.length !== 1 ? 's' : ''}` : ''}`,
+        });
+      }
+    } catch (e) {
+      toast({ title: 'Export failed', description: String(e), variant: 'destructive' });
+    }
+    setExporting(false);
+  };
+
   return (
     <>
       {open && (
@@ -1287,6 +1409,16 @@ function ReplayPlayer({ replayUrl, filename, markers, open, onClose, onSave, ski
                     }}
                   />
                 )}
+                {/* Trim region */}
+                {trimIn !== null && trimOut !== null && duration > 0 && (
+                  <div
+                    className="absolute inset-y-0 bg-cyan-400/25 border-x-2 border-cyan-400/70"
+                    style={{
+                      left: `${(trimIn / duration) * 100}%`,
+                      width: `${((trimOut - trimIn) / duration) * 100}%`,
+                    }}
+                  />
+                )}
               </div>
               {/* Playhead */}
               <div
@@ -1313,6 +1445,26 @@ function ReplayPlayer({ replayUrl, filename, markers, open, onClose, onSave, ski
                   }`} />
                 </button>
               ))}
+              {/* Trim In handle */}
+              {trimIn !== null && duration > 0 && (
+                <div
+                  className="absolute top-0 h-6 pointer-events-none z-20"
+                  style={{ left: `${(trimIn / duration) * 100}%` }}
+                >
+                  <div className="w-0.5 h-full bg-cyan-400" />
+                  <div className="absolute top-0 -ml-1.5 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[8px] border-l-transparent border-r-transparent border-t-cyan-400" />
+                </div>
+              )}
+              {/* Trim Out handle */}
+              {trimOut !== null && duration > 0 && (
+                <div
+                  className="absolute top-0 h-6 pointer-events-none z-20"
+                  style={{ left: `${(trimOut / duration) * 100}%` }}
+                >
+                  <div className="w-0.5 h-full bg-cyan-400" />
+                  <div className="absolute top-0 -ml-1.5 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[8px] border-l-transparent border-r-transparent border-t-cyan-400" />
+                </div>
+              )}
             </div>
             <div className="flex justify-between text-[10px] text-slate-500 font-mono">
               <span>{fmtMs(currentTime * 1000)}</span>
@@ -1426,6 +1578,58 @@ function ReplayPlayer({ replayUrl, filename, markers, open, onClose, onSave, ski
                 <Download className="w-4 h-4" /> Save Recording
               </button>
             </div>
+          </div>
+
+          {/* Clip trim row */}
+          <div className="px-5 pb-4 flex items-center gap-2 shrink-0 flex-wrap border-t border-slate-700/40 pt-3">
+            <Scissors className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+            <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider mr-1">Trim Clip</span>
+            <button
+              onClick={() => { setTrimIn(currentTime); }}
+              title="Set trim in point to current position"
+              className={`flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg transition-colors shrink-0 ${
+                trimIn !== null ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10'
+              }`}
+            >
+              [In {trimIn !== null ? fmtMs(trimIn * 1000) : '—'}
+            </button>
+            <button
+              onClick={() => { setTrimOut(currentTime); }}
+              title="Set trim out point to current position"
+              className={`flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg transition-colors shrink-0 ${
+                trimOut !== null ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10'
+              }`}
+            >
+              Out] {trimOut !== null ? fmtMs(trimOut * 1000) : '—'}
+            </button>
+            {(trimIn !== null || trimOut !== null) && (
+              <button
+                onClick={() => { setTrimIn(null); setTrimOut(null); }}
+                title="Clear trim points"
+                className="text-xs text-slate-500 hover:text-slate-300 px-1.5 py-1 rounded-lg hover:bg-white/5 transition-colors shrink-0"
+              >
+                ✕ Clear
+              </button>
+            )}
+            {trimIn !== null && trimOut !== null && trimOut > trimIn && (
+              <span className="text-[10px] text-slate-500 font-mono shrink-0">
+                {fmtMs((trimOut - trimIn) * 1000)}
+              </span>
+            )}
+            <div className="flex-1" />
+            <button
+              onClick={exportClip}
+              disabled={trimIn === null || trimOut === null || trimOut <= trimIn || exporting}
+              title={trimIn === null || trimOut === null ? 'Set in and out points first' : 'Export clip to disk'}
+              className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors shrink-0 ${
+                trimIn !== null && trimOut !== null && trimOut > trimIn && !exporting
+                  ? 'bg-cyan-600 hover:bg-cyan-500 text-white'
+                  : 'bg-white/5 text-slate-600 cursor-not-allowed'
+              }`}
+            >
+              <Scissors className="w-3.5 h-3.5" />
+              {exporting ? 'Exporting…' : 'Export Clip'}
+            </button>
           </div>
         </div>
       </div>
@@ -2335,6 +2539,7 @@ export default function Recording() {
       <ReplayPlayer
         replayUrl={video.replayUrl}
         filename={video.replayFilename}
+        ffmpegSavedPath={video.ffmpegSavedPath}
         markers={video.markers}
         open={video.showReplay}
         onClose={video.dismissReplay}

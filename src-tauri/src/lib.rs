@@ -847,6 +847,55 @@ fn stop_ffmpeg_preview(state: tauri::State<'_, Arc<FfmpegPreviewState>>) -> Resu
     Ok(())
 }
 
+// ─── FFmpeg clip trimming ─────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn trim_video(
+    app: AppHandle,
+    input_path: String,
+    output_path: String,
+    start_sec: f64,
+    end_sec: f64,
+) -> Result<(), String> {
+    if end_sec <= start_sec {
+        return Err(format!(
+            "Invalid trim range: start={start_sec} end={end_sec}"
+        ));
+    }
+
+    if let Some(parent) = std::path::Path::new(&output_path).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir error: {e}"))?;
+    }
+
+    let duration = end_sec - start_sec;
+
+    let ffmpeg_args: Vec<String> = vec![
+        "-ss".to_string(), format!("{:.6}", start_sec),
+        "-i".to_string(), input_path,
+        "-t".to_string(), format!("{:.6}", duration),
+        "-c".to_string(), "copy".to_string(),
+        "-movflags".to_string(), "+faststart".to_string(),
+        "-avoid_negative_ts".to_string(), "make_zero".to_string(),
+        "-y".to_string(),
+        output_path,
+    ];
+
+    let cmd = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| format!("FFmpeg sidecar not found: {e}"))?
+        .args(&ffmpeg_args);
+
+    let output = cmd.output().await.map_err(|e| format!("FFmpeg execution error: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("FFmpeg trim failed: {}", stderr.trim()))
+    }
+}
+
 // ─── App entry point ─────────────────────────────────────────────────────────
 
 pub fn run() {
@@ -921,6 +970,7 @@ pub fn run() {
             stop_ffmpeg_recording,
             start_ffmpeg_preview,
             stop_ffmpeg_preview,
+            trim_video,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
