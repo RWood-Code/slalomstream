@@ -1846,6 +1846,12 @@ function parseRecordingFilename(filename: string): {
 
 // ─── Recording Library ────────────────────────────────────────────────────────
 
+interface MatchedPassInfo {
+  buoys_scored: number | null;
+  round_number: number;
+  division: string | null;
+}
+
 interface LibraryEntry {
   id: string;
   filename: string;
@@ -1858,6 +1864,7 @@ interface LibraryEntry {
   rope: number | null;
   timestamp: Date | null;
   fileHandle?: FileSystemFileHandle;
+  matchedPass?: MatchedPassInfo;
 }
 
 interface RecordingLibraryProps {
@@ -2001,6 +2008,54 @@ function RecordingLibrary({
       }
 
       all.sort((a, b) => b.modifiedMs - a.modifiedMs);
+
+      // ── Enrich entries with tournament pass data ──────────────────────────
+      // For each entry that has a skier name and timestamp, look up the closest
+      // pass in the API (by name + timestamp proximity) and attach its score
+      // and round number to the entry.
+      try {
+        const uniqueNames = [...new Set(
+          all.filter(e => e.skierName && e.timestamp).map(e => e.skierName),
+        )];
+        if (uniqueNames.length > 0) {
+          const results = await Promise.all(
+            uniqueNames.map(name =>
+              fetch(`/api/passes/search?q=${encodeURIComponent(name)}`)
+                .then(r => r.ok ? r.json() : [])
+                .catch(() => []) as Promise<Array<{
+                  skier_name: string;
+                  created_at: string;
+                  buoys_scored: number | null;
+                  round_number: number;
+                  division: string | null;
+                }>>
+            ),
+          );
+          const allPasses = results.flat();
+          const TEN_MIN_MS = 10 * 60 * 1000;
+          for (const entry of all) {
+            if (!entry.timestamp || !entry.skierName) continue;
+            const ts = entry.timestamp.getTime();
+            // Collect all candidates within the time window then pick nearest
+            const candidates = allPasses.filter(p =>
+              p.skier_name.toLowerCase() === entry.skierName.toLowerCase() &&
+              Math.abs(new Date(p.created_at).getTime() - ts) < TEN_MIN_MS,
+            );
+            if (candidates.length === 0) continue;
+            const nearest = candidates.reduce((best, p) => {
+              const bestDelta = Math.abs(new Date(best.created_at).getTime() - ts);
+              const pDelta    = Math.abs(new Date(p.created_at).getTime() - ts);
+              return pDelta < bestDelta ? p : best;
+            });
+            entry.matchedPass = {
+              buoys_scored: nearest.buoys_scored,
+              round_number: nearest.round_number,
+              division: nearest.division ?? null,
+            };
+          }
+        }
+      } catch { /* enrichment is best-effort; don't block the library */ }
+
       setEntries(all);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load recordings');
@@ -2282,6 +2337,25 @@ function RecordingLibrary({
                                 </span>
                               )}
                             </div>
+                            {/* Tournament pass record (score + round + division) when matched */}
+                            {entry.matchedPass && (
+                              <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                                <Trophy className="w-3 h-3 text-amber-400 shrink-0" />
+                                <span className="text-[11px] font-semibold text-amber-400">
+                                  {entry.matchedPass.buoys_scored !== null
+                                    ? `${entry.matchedPass.buoys_scored} buoys`
+                                    : 'pending'}
+                                </span>
+                                <span className="text-[11px] text-slate-500">
+                                  · Rnd {entry.matchedPass.round_number}
+                                </span>
+                                {entry.matchedPass.division && (
+                                  <span className="text-[11px] text-slate-500">
+                                    · {entry.matchedPass.division}
+                                  </span>
+                                )}
+                              </div>
+                            )}
                             {/* Timestamp + size */}
                             <p className="text-slate-500 text-[11px] mt-0.5 truncate">
                               {entry.timestamp
