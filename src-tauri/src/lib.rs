@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -866,6 +868,40 @@ pub fn run() {
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 check_for_updates(updater_handle).await;
             });
+
+            // ── System tray ────────────────────────────────────────────────
+            let show_item = MenuItemBuilder::with_id("show", "Show SlalomStream")
+                .build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "Quit")
+                .build(app)?;
+            let tray_menu = MenuBuilder::new(app)
+                .item(&show_item)
+                .item(&quit_item)
+                .build()?;
+
+            let tray_icon = tauri::image::Image::from_bytes(
+                include_bytes!("../icons/tray-icon-32.png"),
+            )
+            .expect("tray-icon-32.png is a valid PNG bundled at compile time");
+
+            TrayIconBuilder::with_id("main-tray")
+                .icon(tray_icon)
+                .icon_as_template(true)
+                .tooltip("SlalomStream")
+                .menu(&tray_menu)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => {
+                        if let Some(win) = app.get_webview_window("main") {
+                            win.show().ok();
+                            win.set_focus().ok();
+                        }
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .build(app)?;
 
             Ok(())
         })
