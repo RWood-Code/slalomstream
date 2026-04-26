@@ -16,12 +16,19 @@
  * Binaries are sourced from the official Cloudflare releases:
  *   https://github.com/cloudflare/cloudflared/releases
  *
- * The version is pinned via CLOUDFLARED_VERSION below.  Update KNOWN_SHA256
- * whenever the version is bumped.  To find the correct hashes, run:
- *   curl -sL <binary url> | sha256sum
+ * The version is pinned via CLOUDFLARED_VERSION below.
+ * macOS builds are distributed as .tgz archives; this script extracts them.
  */
 
-import { createWriteStream, mkdirSync, chmodSync, existsSync, unlinkSync } from "fs";
+import {
+  createWriteStream,
+  mkdirSync,
+  chmodSync,
+  existsSync,
+  unlinkSync,
+  mkdtempSync,
+  rmSync,
+} from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { execSync } from "child_process";
@@ -29,6 +36,7 @@ import { Transform } from "stream";
 import { pipeline } from "stream/promises";
 import { createHash } from "crypto";
 import https from "https";
+import os from "os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -39,25 +47,18 @@ const BINARIES_DIR = resolve(ROOT, "src-tauri", "binaries");
 const CLOUDFLARED_VERSION = "2025.4.0";
 
 // Map Tauri target triple → cloudflared release asset name
+// macOS assets are .tgz archives; Windows is a direct .exe
 const TRIPLE_TO_ASSET = {
-  "aarch64-apple-darwin": "cloudflared-darwin-arm64",
-  "x86_64-apple-darwin": "cloudflared-darwin-amd64",
+  "aarch64-apple-darwin": "cloudflared-darwin-arm64.tgz",
+  "x86_64-apple-darwin": "cloudflared-darwin-amd64.tgz",
   "x86_64-pc-windows-msvc": "cloudflared-windows-amd64.exe",
 };
 
-// SHA-256 of the binary for each asset at CLOUDFLARED_VERSION.
-// Recompute by running:
-//   curl -sL <binary url> | sha256sum
-// whenever CLOUDFLARED_VERSION changes.
-//
-// To populate these values for the first time, run:
-//   node scripts/download-cloudflared.mjs aarch64-apple-darwin
-//   node scripts/download-cloudflared.mjs x86_64-apple-darwin
-//   node scripts/download-cloudflared.mjs x86_64-pc-windows-msvc
-// and copy the logged SHA-256 into each entry below.
+// SHA-256 of the downloaded archive/binary for each asset at CLOUDFLARED_VERSION.
+// Populate by running the script once and copying the logged SHA-256 values.
 const KNOWN_SHA256 = {
-  // "cloudflared-darwin-arm64": "<sha256 here>",
-  // "cloudflared-darwin-amd64": "<sha256 here>",
+  // "cloudflared-darwin-arm64.tgz": "<sha256 here>",
+  // "cloudflared-darwin-amd64.tgz": "<sha256 here>",
   // "cloudflared-windows-amd64.exe": "<sha256 here>",
 };
 
@@ -101,10 +102,6 @@ function download(url) {
   });
 }
 
-/**
- * Returns a Transform stream that computes SHA-256 as data passes through.
- * After the stream ends, read the digest from transform.digest.
- */
 function createSha256Transform() {
   const hash = createHash("sha256");
   const transform = new Transform({
@@ -133,6 +130,7 @@ async function main() {
   }
 
   const isWindows = triple.includes("windows");
+  const isTgz = asset.endsWith(".tgz");
   const ext = isWindows ? ".exe" : "";
   const outputName = `cloudflared-${triple}${ext}`;
   const outputPath = resolve(BINARIES_DIR, outputName);
@@ -149,14 +147,19 @@ async function main() {
   console.log(`  Source : ${remoteUrl}`);
   console.log(`  Dest   : ${outputPath}`);
 
+  // For .tgz archives, download to a temp file then extract
+  const downloadPath = isTgz
+    ? resolve(BINARIES_DIR, asset)
+    : outputPath;
+
   const response = await download(remoteUrl);
   const sha256Transform = createSha256Transform();
-  const fileStream = createWriteStream(outputPath);
+  const fileStream = createWriteStream(downloadPath);
 
   try {
     await pipeline(response, sha256Transform, fileStream);
   } catch (err) {
-    try { unlinkSync(outputPath); } catch { /* ignore */ }
+    try { unlinkSync(downloadPath); } catch { /* ignore */ }
     throw err;
   }
 
@@ -164,23 +167,19 @@ async function main() {
   const expectedDigest = KNOWN_SHA256[asset];
 
   if (expectedDigest && actualDigest !== expectedDigest) {
-    unlinkSync(outputPath);
+    unlinkSync(downloadPath);
     throw new Error(
       `SHA-256 mismatch for ${asset}!\n` +
         `  expected : ${expectedDigest}\n` +
         `  actual   : ${actualDigest}\n` +
-        "The downloaded binary has been removed. " +
-        "This may indicate a supply-chain issue or a stale KNOWN_SHA256 entry.\n" +
-        `Update KNOWN_SHA256 in scripts/download-cloudflared.mjs if you bumped CLOUDFLARED_VERSION.`
+        "The downloaded file has been removed. " +
+        "This may indicate a supply-chain issue or a stale KNOWN_SHA256 entry."
     );
   }
 
   if (expectedDigest) {
     console.log(`  SHA-256  : ${actualDigest} ✓`);
   } else {
-    // No pinned hash yet — log the actual value prominently so the developer
-    // can copy it into KNOWN_SHA256 and enable enforcement for future runs.
-    // See follow-up task: "Lock down the cloudflared download with verified checksums"
     console.warn(
       "\n" +
       "  ⚠  SUPPLY-CHAIN WARNING: No expected SHA-256 is pinned for:\n" +
@@ -189,6 +188,27 @@ async function main() {
       "  scripts/download-cloudflared.mjs to enforce integrity on future runs.\n"
     );
     console.log(`  SHA-256  : ${actualDigest}`);
+  }
+
+  // Extract the binary from the .tgz archive
+  if (isTgz) {
+    const tmpDir = mkdtempSync(resolve(os.tmpdir(), "cloudflared-"));
+    try {
+      execSync(`tar -xzf "${downloadPath}" -C "${tmpDir}"`, { stdio: "pipe" });
+      // The binary inside the archive is named 'cloudflared' (no extension)
+      const extractedBinary = resolve(tmpDir, "cloudflared");
+      if (!existsSync(extractedBinary)) {
+        throw new Error(
+          `Expected 'cloudflared' binary not found inside ${asset}. ` +
+          `Contents: ${execSync(`tar -tzf "${downloadPath}"`, { encoding: "utf-8" }).trim()}`
+        );
+      }
+      execSync(`cp "${extractedBinary}" "${outputPath}"`);
+    } finally {
+      try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+      try { unlinkSync(downloadPath); } catch { /* ignore */ }
+    }
+    console.log(`  Extracted binary to: ${outputPath}`);
   }
 
   if (!isWindows) {
