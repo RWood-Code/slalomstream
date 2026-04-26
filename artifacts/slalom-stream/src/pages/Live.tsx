@@ -1,8 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Waves, Maximize2, Minimize2, Camera, CameraOff, SwitchCamera, Trophy, Clock } from 'lucide-react';
+import { isTauri, tauriInvoke } from '@/lib/tauri';
 
 const LS_DEVICE_KEY = 'slalom_camera_device_id';
+const LS_FFMPEG_DEVICE_KEY = 'slalom_ffmpeg_device_name';
+const PREVIEW_PORT = 9877;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function ordinal(n: number): string {
@@ -47,7 +50,6 @@ function useActiveTournamentInfo() {
     refetchInterval: 2000,
   });
 
-  // Skiers list — needed to look up club for the active skier
   const { data: skiers } = useQuery({
     queryKey: ['live-skiers', tid],
     queryFn: async () => {
@@ -74,7 +76,6 @@ function useActiveTournamentInfo() {
     refetchInterval: 1500,
   });
 
-  // Personal best check — only fires when there's an active pass
   const { data: pbData } = useQuery({
     queryKey: ['live-pb', activePass?.skier_name, activePass?.division, activePass?.id],
     queryFn: async () => {
@@ -92,14 +93,11 @@ function useActiveTournamentInfo() {
     refetchInterval: 15000,
   });
 
-  // ── Derived data ─────────────────────────────────────────────────────────────
-
   const allSkiers: any[] = skiers ?? [];
   const completedPasses = allPasses
     .filter((p: any) => p.status === 'complete' && p.buoys_scored !== null)
     .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
-  // Active skier's club — matched from skier register by name
   const activeSkierRecord = activePass
     ? allSkiers.find((s: any) =>
         `${s.first_name} ${s.surname}`.toLowerCase() === activePass.skier_name.toLowerCase()
@@ -107,14 +105,12 @@ function useActiveTournamentInfo() {
     : null;
   const activeSkierClub: string | null = activeSkierRecord?.club ?? null;
 
-  // Round-by-round history for the active skier in this tournament
   const skierHistory: any[] = activePass
     ? completedPasses
         .filter((p: any) => p.skier_name === activePass.skier_name)
         .sort((a: any, b: any) => a.round_number - b.round_number)
     : [];
 
-  // Division standings: best buoys_scored per skier in same division
   const divisionPasses = activePass
     ? completedPasses.filter((p: any) => (p.division || 'Open') === (activePass.division || 'Open'))
     : completedPasses;
@@ -130,11 +126,6 @@ function useActiveTournamentInfo() {
     : 0;
   const divisionTotal = sortedSkiers.length;
 
-  // On Deck: infer the NEXT skier after the active skier from a prior round's run order.
-  // Primary: anchor to the most recently completed pass's round — find the active skier's
-  //   position there and return the skier one slot ahead.
-  // Fallback: use the highest round in which the active skier has a completed pass.
-  // Returns null when inference is undeterminable (first round, active skier was last, etc.).
   let onDeckPass: any = null;
   if (activePass && completedPasses.length > 0) {
     const tryInferNextFromRound = (round: number): any => {
@@ -142,17 +133,14 @@ function useActiveTournamentInfo() {
       const idx = roundPasses.findIndex((p: any) => p.skier_name === activePass.skier_name);
       if (idx >= 0 && idx + 1 < roundPasses.length) {
         const candidate = roundPasses[idx + 1];
-        // Skip the candidate if they happen to be the current active pass skier
         return candidate.skier_name !== activePass.skier_name ? candidate : null;
       }
       return null;
     };
 
-    // Primary: most recently completed pass's round as reference
     const lastCompleted = completedPasses[completedPasses.length - 1];
     onDeckPass = tryInferNextFromRound(lastCompleted.round_number);
 
-    // Fallback: active skier's own highest completed round
     if (!onDeckPass) {
       const activeSkierRounds = completedPasses
         .filter((p: any) => p.skier_name === activePass.skier_name)
@@ -163,7 +151,6 @@ function useActiveTournamentInfo() {
     }
   }
 
-  // PB Candidate: compute estimated median of submitted scoring-judge scores
   const currentScores: any[] = scores ?? [];
   const numberedScores = currentScores.filter((s: any) => s.judge_role !== 'chief_judge');
   let estimatedScore: number | null = null;
@@ -194,169 +181,21 @@ function useActiveTournamentInfo() {
   };
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
-export default function Live() {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const [cameraActive, setCameraActive] = useState(false);
-  const [devices, setDevices] = useState<{ deviceId: string; label: string }[]>([]);
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string>(
-    () => localStorage.getItem(LS_DEVICE_KEY) ?? ''
-  );
-  const [error, setError] = useState<string | null>(null);
-  const [fullscreen, setFullscreen] = useState(false);
-  const [showControls, setShowControls] = useState(true);
-  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const {
-    tournament, activePass, scores,
-    activeSkierClub, skierHistory, activeSkierRank, divisionTotal,
-    onDeckPass, isPBCandidate,
-  } = useActiveTournamentInfo();
-
-  const refreshDevices = useCallback(async () => {
-    try {
-      const all = await navigator.mediaDevices.enumerateDevices();
-      const cams = all
-        .filter(d => d.kind === 'videoinput')
-        .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` }));
-      setDevices(cams);
-      setSelectedDeviceId(prev => {
-        const stored = localStorage.getItem(LS_DEVICE_KEY);
-        if (stored && cams.find(c => c.deviceId === stored)) return stored;
-        if (prev && cams.find(c => c.deviceId === prev)) return prev;
-        return cams[0]?.deviceId ?? '';
-      });
-    } catch {}
-  }, []);
-
-  useEffect(() => {
-    refreshDevices();
-    navigator.mediaDevices?.addEventListener?.('devicechange', refreshDevices);
-    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', refreshDevices);
-  }, [refreshDevices]);
-
-  useEffect(() => {
-    const saved = localStorage.getItem(LS_DEVICE_KEY);
-    if (saved) startCamera(saved);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const startCamera = useCallback(async (deviceId?: string) => {
-    setError(null);
-    const target = deviceId ?? selectedDeviceId;
-    try {
-      streamRef.current?.getTracks().forEach(t => t.stop());
-      const constraints: MediaTrackConstraints = {
-        width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 },
-      };
-      if (target) constraints.deviceId = { exact: target };
-      const stream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.muted = true;
-        videoRef.current.play().catch(() => {});
-      }
-      if (target) {
-        setSelectedDeviceId(target);
-        localStorage.setItem(LS_DEVICE_KEY, target);
-      }
-      await refreshDevices();
-      setCameraActive(true);
-    } catch (e: any) {
-      setError(e.message || 'Camera access denied');
-    }
-  }, [selectedDeviceId, refreshDevices]);
-
-  const stopCamera = useCallback(() => {
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
-    if (videoRef.current) videoRef.current.srcObject = null;
-    setCameraActive(false);
-  }, []);
-
-  useEffect(() => () => { streamRef.current?.getTracks().forEach(t => t.stop()); }, []);
-
-  const toggleFullscreen = useCallback(() => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().then(() => setFullscreen(true)).catch(() => {});
-    } else {
-      document.exitFullscreen().then(() => setFullscreen(false)).catch(() => {});
-    }
-  }, []);
-
-  const resetHideTimer = useCallback(() => {
-    setShowControls(true);
-    if (hideTimer.current) clearTimeout(hideTimer.current);
-    hideTimer.current = setTimeout(() => setShowControls(false), 3000);
-  }, []);
-
-  useEffect(() => {
-    resetHideTimer();
-    return () => { if (hideTimer.current) clearTimeout(hideTimer.current); };
-  }, []);
-
-  // Judge panel
-  const judgeCount = tournament?.judge_count ?? 3;
+// ─── Score overlay (shared between full and camera-only modes) ────────────────
+function ScoreOverlay({
+  activePass, scores, tournament, activeSkierClub, skierHistory,
+  activeSkierRank, divisionTotal, onDeckPass, isPBCandidate, judgeCount,
+}: {
+  activePass: any; scores: any[]; tournament: any;
+  activeSkierClub: string | null; skierHistory: any[];
+  activeSkierRank: number; divisionTotal: number;
+  onDeckPass: any; isPBCandidate: boolean; judgeCount: number;
+}) {
   const panelRoles = ALL_PANEL_ROLES.slice(0, judgeCount);
   const cjScore = scores.find((s: any) => s.judge_role === 'chief_judge');
 
   return (
-    <div
-      className="fixed inset-0 bg-black flex items-center justify-center overflow-hidden cursor-none"
-      onMouseMove={resetHideTimer}
-      onClick={resetHideTimer}
-    >
-      {/* Camera video */}
-      <video
-        ref={videoRef}
-        className="w-full h-full object-cover"
-        playsInline
-        autoPlay
-        muted
-        style={{ display: cameraActive ? 'block' : 'none' }}
-      />
-
-      {/* No camera placeholder */}
-      {!cameraActive && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 bg-gradient-to-br from-slate-900 to-black">
-          <div className="flex items-center gap-3 mb-2">
-            <Waves className="w-8 h-8 text-emerald-400" />
-            <span className="text-white font-bold text-2xl tracking-tight">SlalomStream</span>
-            <span className="text-emerald-400 text-xs font-bold uppercase tracking-widest bg-emerald-400/10 px-2 py-0.5 rounded">Live</span>
-          </div>
-
-          {error && <p className="text-red-400 text-sm">{error}</p>}
-
-          {devices.length > 1 && (
-            <select
-              value={selectedDeviceId}
-              onChange={e => setSelectedDeviceId(e.target.value)}
-              className="text-sm rounded-lg bg-slate-700 border border-slate-600 text-white px-3 py-2 focus:outline-none max-w-xs w-full"
-            >
-              {devices.map(d => (
-                <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
-              ))}
-            </select>
-          )}
-
-          <button
-            onClick={() => startCamera()}
-            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-3 rounded-xl transition-colors"
-          >
-            <Camera className="w-5 h-5" /> Enable Camera
-          </button>
-
-          {tournament && (
-            <p className="text-slate-400 text-sm mt-2">{tournament.name}</p>
-          )}
-        </div>
-      )}
-
-      {/* ── Overlays ──────────────────────────────────────────────────────────── */}
-
-      {/* Top-left: tournament name */}
+    <>
       {tournament && (
         <div className="absolute top-4 left-4 bg-black/60 backdrop-blur text-white px-4 py-2 rounded-xl">
           <div className="flex items-center gap-2">
@@ -366,24 +205,16 @@ export default function Live() {
         </div>
       )}
 
-      {/* Top-right: current skier panel */}
       {activePass && (
         <div className="absolute top-4 right-4 bg-black/80 backdrop-blur-md text-white rounded-2xl px-5 py-4 max-w-[300px] space-y-2.5 text-right">
-          {/* On Water pulse */}
           <p className="text-[11px] font-bold text-emerald-400 uppercase tracking-widest flex items-center justify-end gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse inline-block" />
             On Water
           </p>
-
-          {/* Skier name */}
           <p className="font-black text-3xl leading-tight tracking-tight">{activePass.skier_name}</p>
-
-          {/* Club (if available) */}
           {activeSkierClub && (
             <p className="text-slate-400 text-sm font-semibold -mt-1">{activeSkierClub}</p>
           )}
-
-          {/* Division + round + rope + speed */}
           <div className="flex items-center justify-end gap-1.5 flex-wrap">
             <span className="text-[11px] bg-white/15 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">
               {activePass.division || 'Open'}
@@ -392,8 +223,6 @@ export default function Live() {
               R{activePass.round_number} · {activePass.rope_length}m · {activePass.speed_kph}kph
             </span>
           </div>
-
-          {/* Round history — "R1: 4.5b @ 13m / 55kph" style, capped at 4 rows */}
           {skierHistory.length > 0 && (
             <div className="flex flex-col items-end gap-1 pt-0.5">
               {skierHistory.slice(-4).map((p: any) => (
@@ -404,8 +233,6 @@ export default function Live() {
               ))}
             </div>
           )}
-
-          {/* Standings rank + PB candidate badge */}
           <div className="flex items-center justify-end gap-2 flex-wrap pt-0.5">
             {activeSkierRank > 0 && divisionTotal > 0 && (
               <span className="text-[11px] bg-white/15 text-white px-2.5 py-1 rounded-lg font-bold">
@@ -421,10 +248,8 @@ export default function Live() {
         </div>
       )}
 
-      {/* Bottom-left: judge scores — enlarged chips with Waiting state */}
       {activePass && (
         <div className="absolute bottom-16 left-4 flex flex-col gap-2">
-          {/* Numbered judges */}
           <div className="flex flex-col gap-1.5">
             {panelRoles.map(role => {
               const s = scores.find((sc: any) => sc.judge_role === role);
@@ -455,8 +280,6 @@ export default function Live() {
               );
             })}
           </div>
-
-          {/* CJ score — separated below numbered judges */}
           {cjScore && (
             <div className="flex items-center gap-3 bg-black/80 backdrop-blur text-white px-4 py-2.5 rounded-xl border border-white/10">
               <span className="text-purple-400 text-sm font-black w-5 shrink-0">CJ</span>
@@ -468,7 +291,6 @@ export default function Live() {
         </div>
       )}
 
-      {/* Bottom-right: On Deck panel — next skier inferred from previous round sequence */}
       {onDeckPass && activePass && (
         <div className="absolute bottom-16 right-4 bg-black/70 backdrop-blur-md text-white px-4 py-3 rounded-xl text-right space-y-0.5">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">On Deck</p>
@@ -476,8 +298,436 @@ export default function Live() {
           <p className="text-sm text-slate-300">{onDeckPass.division || 'Open'}</p>
         </div>
       )}
+    </>
+  );
+}
 
-      {/* Controls overlay — fades after 3s idle */}
+// ─── Camera-only mode (?camera=1) ─────────────────────────────────────────────
+function CameraOnlyView() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const previewImgRef = useRef<HTMLImageElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [cameraActive, setCameraActive] = useState(false);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>(
+    () => localStorage.getItem(LS_DEVICE_KEY) ?? ''
+  );
+  const [error, setError] = useState<string | null>(null);
+  // Tauri: FFmpeg-native device list (native_name is what FFmpeg accepts)
+  const [ffmpegVideoDevices, setFfmpegVideoDevices] = useState<{ deviceId: string; label: string; native_name: string }[]>([]);
+  const [selectedFfmpegDeviceName, setSelectedFfmpegDeviceName] = useState<string>(
+    () => localStorage.getItem(LS_FFMPEG_DEVICE_KEY) ?? '0'
+  );
+
+  const {
+    tournament, activePass, scores,
+    activeSkierClub, skierHistory, activeSkierRank, divisionTotal,
+    onDeckPass, isPBCandidate,
+  } = useActiveTournamentInfo();
+
+  // Load native FFmpeg device list at startup in Tauri mode
+  useEffect(() => {
+    if (!isTauri) return;
+    tauriInvoke<{ deviceId: string; label: string; native_name: string }[]>('list_video_devices')
+      .then(devs => {
+        setFfmpegVideoDevices(devs);
+        if (devs.length > 0) {
+          const stored = localStorage.getItem(LS_FFMPEG_DEVICE_KEY);
+          const valid = stored && devs.find(d => d.native_name === stored);
+          const name = valid ? stored : devs[0].native_name;
+          setSelectedFfmpegDeviceName(name);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const startCamera = useCallback(async (deviceId?: string) => {
+    setError(null);
+    const target = deviceId ?? selectedDeviceId;
+
+    if (isTauri) {
+      try {
+        await tauriInvoke('stop_ffmpeg_preview').catch(() => {});
+        await tauriInvoke('start_ffmpeg_preview', {
+          deviceName: selectedFfmpegDeviceName,
+          previewPort: PREVIEW_PORT,
+        });
+        if (previewImgRef.current) {
+          previewImgRef.current.src = `http://127.0.0.1:${PREVIEW_PORT}/?t=${Date.now()}`;
+        }
+        setCameraActive(true);
+      } catch (e: any) {
+        setError(`FFmpeg preview failed: ${String(e)}`);
+      }
+      return;
+    }
+
+    try {
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      const constraints: MediaTrackConstraints = {
+        width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 },
+      };
+      if (target) constraints.deviceId = { exact: target };
+      const stream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.muted = true;
+        videoRef.current.play().catch(() => {});
+      }
+      if (target) {
+        setSelectedDeviceId(target);
+        localStorage.setItem(LS_DEVICE_KEY, target);
+      }
+      setCameraActive(true);
+    } catch (e: any) {
+      setError(e.message || 'Camera access denied');
+    }
+  }, [selectedDeviceId, selectedFfmpegDeviceName]);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(LS_DEVICE_KEY);
+    startCamera(saved ?? undefined);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => () => {
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    if (isTauri) tauriInvoke('stop_ffmpeg_preview').catch(() => {});
+  }, []);
+
+  const judgeCount = tournament?.judge_count ?? 3;
+
+  return (
+    <div className="fixed inset-0 bg-black overflow-hidden">
+      {/* Tauri: MJPEG stream via <img> */}
+      {isTauri && (
+        <img
+          ref={previewImgRef}
+          className="w-full h-full object-cover"
+          alt="Camera preview"
+          style={{ display: cameraActive ? 'block' : 'none' }}
+        />
+      )}
+      {/* Browser: getUserMedia via <video> */}
+      {!isTauri && (
+        <video
+          ref={videoRef}
+          className="w-full h-full object-cover"
+          playsInline
+          autoPlay
+          muted
+          style={{ display: cameraActive ? 'block' : 'none' }}
+        />
+      )}
+
+      {!cameraActive && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 bg-gradient-to-br from-slate-900 to-black">
+          <div className="flex items-center gap-3">
+            <Waves className="w-8 h-8 text-emerald-400" />
+            <span className="text-white font-bold text-2xl tracking-tight">SlalomStream</span>
+            <span className="text-emerald-400 text-xs font-bold uppercase tracking-widest bg-emerald-400/10 px-2 py-0.5 rounded">Camera Only</span>
+          </div>
+          {error && <p className="text-red-400 text-sm">{error}</p>}
+          {/* Tauri: show FFmpeg native device selector */}
+          {isTauri && ffmpegVideoDevices.length > 1 && (
+            <select
+              value={selectedFfmpegDeviceName}
+              onChange={e => {
+                setSelectedFfmpegDeviceName(e.target.value);
+                localStorage.setItem(LS_FFMPEG_DEVICE_KEY, e.target.value);
+              }}
+              className="text-sm rounded-lg bg-slate-700 border border-slate-600 text-white px-3 py-2 focus:outline-none max-w-xs w-full"
+            >
+              {ffmpegVideoDevices.map(d => (
+                <option key={d.deviceId} value={d.native_name}>{d.label}</option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={() => startCamera()}
+            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-3 rounded-xl transition-colors"
+          >
+            <Camera className="w-5 h-5" /> Enable Camera
+          </button>
+        </div>
+      )}
+
+      <ScoreOverlay
+        activePass={activePass}
+        scores={scores}
+        tournament={tournament}
+        activeSkierClub={activeSkierClub}
+        skierHistory={skierHistory}
+        activeSkierRank={activeSkierRank}
+        divisionTotal={divisionTotal}
+        onDeckPass={onDeckPass}
+        isPBCandidate={isPBCandidate}
+        judgeCount={judgeCount}
+      />
+    </div>
+  );
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
+export default function Live() {
+  const params = new URLSearchParams(window.location.search);
+  const cameraOnly = params.get('camera') === '1';
+
+  if (cameraOnly) {
+    return <CameraOnlyView />;
+  }
+
+  return <LiveFull />;
+}
+
+function LiveFull() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const previewImgRef = useRef<HTMLImageElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [cameraActive, setCameraActive] = useState(false);
+  const [devices, setDevices] = useState<{ deviceId: string; label: string }[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>(
+    () => localStorage.getItem(LS_DEVICE_KEY) ?? ''
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tauri: FFmpeg-native device list
+  const [ffmpegVideoDevices, setFfmpegVideoDevices] = useState<{ deviceId: string; label: string; native_name: string }[]>([]);
+  const [selectedFfmpegDeviceName, setSelectedFfmpegDeviceName] = useState<string>(
+    () => localStorage.getItem(LS_FFMPEG_DEVICE_KEY) ?? '0'
+  );
+
+  const {
+    tournament, activePass, scores,
+    activeSkierClub, skierHistory, activeSkierRank, divisionTotal,
+    onDeckPass, isPBCandidate,
+  } = useActiveTournamentInfo();
+
+  const refreshDevices = useCallback(async () => {
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      const cams = all
+        .filter(d => d.kind === 'videoinput')
+        .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` }));
+      setDevices(cams);
+      setSelectedDeviceId(prev => {
+        const stored = localStorage.getItem(LS_DEVICE_KEY);
+        if (stored && cams.find(c => c.deviceId === stored)) return stored;
+        if (prev && cams.find(c => c.deviceId === prev)) return prev;
+        return cams[0]?.deviceId ?? '';
+      });
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    refreshDevices();
+    navigator.mediaDevices?.addEventListener?.('devicechange', refreshDevices);
+    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', refreshDevices);
+  }, [refreshDevices]);
+
+  // Tauri: load native FFmpeg device list once at startup
+  useEffect(() => {
+    if (!isTauri) return;
+    tauriInvoke<{ deviceId: string; label: string; native_name: string }[]>('list_video_devices')
+      .then(devs => {
+        setFfmpegVideoDevices(devs);
+        if (devs.length > 0) {
+          const stored = localStorage.getItem(LS_FFMPEG_DEVICE_KEY);
+          const valid = stored && devs.find(d => d.native_name === stored);
+          const name = valid ? stored : devs[0].native_name;
+          setSelectedFfmpegDeviceName(name);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(LS_DEVICE_KEY);
+    if (saved) startCamera(saved);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const startCamera = useCallback(async (deviceId?: string) => {
+    setError(null);
+    const target = deviceId ?? selectedDeviceId;
+
+    if (isTauri) {
+      try {
+        await tauriInvoke('stop_ffmpeg_preview').catch(() => {});
+        await tauriInvoke('start_ffmpeg_preview', {
+          deviceName: selectedFfmpegDeviceName,
+          previewPort: PREVIEW_PORT,
+        });
+        if (previewImgRef.current) {
+          previewImgRef.current.src = `http://127.0.0.1:${PREVIEW_PORT}/?t=${Date.now()}`;
+        }
+        if (target) {
+          setSelectedDeviceId(target);
+          localStorage.setItem(LS_DEVICE_KEY, target);
+        }
+        await refreshDevices();
+        setCameraActive(true);
+      } catch (e: any) {
+        setError(`FFmpeg preview failed: ${String(e)}`);
+      }
+      return;
+    }
+
+    try {
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      const constraints: MediaTrackConstraints = {
+        width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 },
+      };
+      if (target) constraints.deviceId = { exact: target };
+      const stream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.muted = true;
+        videoRef.current.play().catch(() => {});
+      }
+      if (target) {
+        setSelectedDeviceId(target);
+        localStorage.setItem(LS_DEVICE_KEY, target);
+      }
+      await refreshDevices();
+      setCameraActive(true);
+    } catch (e: any) {
+      setError(e.message || 'Camera access denied');
+    }
+  }, [selectedDeviceId, selectedFfmpegDeviceName, refreshDevices]);
+
+  const stopCamera = useCallback(() => {
+    if (isTauri) {
+      tauriInvoke('stop_ffmpeg_preview').catch(() => {});
+      if (previewImgRef.current) previewImgRef.current.src = '';
+    }
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setCameraActive(false);
+  }, []);
+
+  useEffect(() => () => {
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    if (isTauri) tauriInvoke('stop_ffmpeg_preview').catch(() => {});
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().then(() => setFullscreen(true)).catch(() => {});
+    } else {
+      document.exitFullscreen().then(() => setFullscreen(false)).catch(() => {});
+    }
+  }, []);
+
+  const resetHideTimer = useCallback(() => {
+    setShowControls(true);
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => setShowControls(false), 3000);
+  }, []);
+
+  useEffect(() => {
+    resetHideTimer();
+    return () => { if (hideTimer.current) clearTimeout(hideTimer.current); };
+  }, []);
+
+  const judgeCount = tournament?.judge_count ?? 3;
+
+  return (
+    <div
+      className="fixed inset-0 bg-black flex items-center justify-center overflow-hidden cursor-none"
+      onMouseMove={resetHideTimer}
+      onClick={resetHideTimer}
+    >
+      {/* Tauri: MJPEG preview via <img> */}
+      {isTauri && (
+        <img
+          ref={previewImgRef}
+          className="w-full h-full object-cover"
+          alt="Camera preview"
+          style={{ display: cameraActive ? 'block' : 'none' }}
+        />
+      )}
+      {/* Browser: getUserMedia via <video> */}
+      {!isTauri && (
+        <video
+          ref={videoRef}
+          className="w-full h-full object-cover"
+          playsInline
+          autoPlay
+          muted
+          style={{ display: cameraActive ? 'block' : 'none' }}
+        />
+      )}
+
+      {!cameraActive && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 bg-gradient-to-br from-slate-900 to-black">
+          <div className="flex items-center gap-3 mb-2">
+            <Waves className="w-8 h-8 text-emerald-400" />
+            <span className="text-white font-bold text-2xl tracking-tight">SlalomStream</span>
+            <span className="text-emerald-400 text-xs font-bold uppercase tracking-widest bg-emerald-400/10 px-2 py-0.5 rounded">Live</span>
+          </div>
+
+          {error && <p className="text-red-400 text-sm">{error}</p>}
+
+          {/* Tauri: FFmpeg native device selector */}
+          {isTauri && ffmpegVideoDevices.length > 1 && (
+            <select
+              value={selectedFfmpegDeviceName}
+              onChange={e => {
+                setSelectedFfmpegDeviceName(e.target.value);
+                localStorage.setItem(LS_FFMPEG_DEVICE_KEY, e.target.value);
+              }}
+              className="text-sm rounded-lg bg-slate-700 border border-slate-600 text-white px-3 py-2 focus:outline-none max-w-xs w-full"
+            >
+              {ffmpegVideoDevices.map(d => (
+                <option key={d.deviceId} value={d.native_name}>{d.label}</option>
+              ))}
+            </select>
+          )}
+
+          {/* Browser: enumerated device selector */}
+          {!isTauri && devices.length > 1 && (
+            <select
+              value={selectedDeviceId}
+              onChange={e => setSelectedDeviceId(e.target.value)}
+              className="text-sm rounded-lg bg-slate-700 border border-slate-600 text-white px-3 py-2 focus:outline-none max-w-xs w-full"
+            >
+              {devices.map(d => (
+                <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+              ))}
+            </select>
+          )}
+
+          <button
+            onClick={() => startCamera()}
+            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-3 rounded-xl transition-colors"
+          >
+            <Camera className="w-5 h-5" /> Enable Camera
+          </button>
+
+          {tournament && (
+            <p className="text-slate-400 text-sm mt-2">{tournament.name}</p>
+          )}
+        </div>
+      )}
+
+      <ScoreOverlay
+        activePass={activePass}
+        scores={scores}
+        tournament={tournament}
+        activeSkierClub={activeSkierClub}
+        skierHistory={skierHistory}
+        activeSkierRank={activeSkierRank}
+        divisionTotal={divisionTotal}
+        onDeckPass={onDeckPass}
+        isPBCandidate={isPBCandidate}
+        judgeCount={judgeCount}
+      />
+
       <div
         className={`absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/80 to-transparent px-4 py-3 flex items-center justify-between gap-3 transition-opacity duration-500 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
         style={{ cursor: 'default' }}

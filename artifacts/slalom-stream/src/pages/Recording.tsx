@@ -11,14 +11,19 @@ import {
   CheckCircle2, Download, ExternalLink, SwitchCamera,
   X, Monitor, Gauge, MonitorPlay, FolderOpen, FolderPlus,
   Clock, Flag, AlertTriangle, FileSearch, UserPlus, Trophy,
+  Mic, MicOff, BookmarkPlus, SkipBack, SkipForward,
+  ChevronLeft, ChevronRight, Repeat, HardDrive, WifiOff,
+  Video,
 } from 'lucide-react';
 import { ROPE_LENGTHS, SPEEDS, VALID_IWWF_SCORES, DIVISIONS, formatRope, formatSpeed, getRopeColour, getJudgingPanel, suggestNextRope } from '@/lib/utils';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { QRCodeSVG } from 'qrcode.react';
+import { isTauri, tauriInvoke, tauriConvertFileSrc } from '@/lib/tauri';
 
 const LS_DEVICE_KEY = 'slalom_camera_device_id';
 const LS_LITE_MODE  = 'slalom_lite_mode';
+const MAX_MARKERS   = 8;
 
 // ─── IndexedDB helpers for persisting directory handles ───────────────────────
 const IDB_DB_NAME = 'slalom-stream-dirs';
@@ -62,89 +67,220 @@ async function idbDeleteDir(key: string): Promise<void> {
   });
 }
 
-// ─── Save folder hook ─────────────────────────────────────────────────────────
+// ─── Save folder hook (Tauri-native + browser fallback) ───────────────────────
+interface FolderEntry {
+  path: string;
+  name: string;
+  freeBytes: number | null;
+  accessible: boolean;
+}
+
 interface SaveFolders {
-  primaryHandle: FileSystemDirectoryHandle | null;
-  backupHandle:  FileSystemDirectoryHandle | null;
+  primary: FolderEntry | null;
+  backup:  FolderEntry | null;
   hasDirectoryPicker: boolean;
   choosePrimary: () => Promise<void>;
   chooseBackup:  () => Promise<void>;
   clearPrimary:  () => Promise<void>;
   clearBackup:   () => Promise<void>;
-  /** Write blob to primary (and backup if set). Returns true if at least one folder saved. */
   saveToFolders: (blob: Blob, filename: string) => Promise<{ savedPrimary: boolean; savedBackup: boolean }>;
+  /** Primary path string (Tauri mode) or null */
+  primaryPath: string | null;
+  /** Backup path string (Tauri mode) or null */
+  backupPath: string | null;
+  /** Legacy browser handle (for non-Tauri fallback) */
+  primaryHandle: FileSystemDirectoryHandle | null;
+  backupHandle:  FileSystemDirectoryHandle | null;
+}
+
+const FIVE_GB = 5 * 1024 * 1024 * 1024;
+
+async function getDiskInfo(path: string): Promise<{ freeBytes: number | null; accessible: boolean }> {
+  if (!isTauri) return { freeBytes: null, accessible: true };
+  try {
+    const accessible = await tauriInvoke<boolean>('check_path_accessible', { path });
+    if (!accessible) return { freeBytes: null, accessible: false };
+    const freeBytes = await tauriInvoke<number>('get_disk_space', { path });
+    return { freeBytes, accessible: true };
+  } catch {
+    return { freeBytes: null, accessible: false };
+  }
+}
+
+function pathToName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 
 function useSaveFolders(): SaveFolders {
+  // Tauri-mode: string paths
+  const [primaryPath, setPrimaryPath] = useState<string | null>(null);
+  const [backupPath,  setBackupPath]  = useState<string | null>(null);
+  const [primaryInfo, setPrimaryInfo] = useState<{ freeBytes: number | null; accessible: boolean }>({ freeBytes: null, accessible: true });
+  const [backupInfo,  setBackupInfo]  = useState<{ freeBytes: number | null; accessible: boolean }>({ freeBytes: null, accessible: true });
+
+  // Browser-mode: directory handles (IndexedDB)
   const [primaryHandle, setPrimaryHandle] = useState<FileSystemDirectoryHandle | null>(null);
   const [backupHandle,  setBackupHandle]  = useState<FileSystemDirectoryHandle | null>(null);
-  const hasDirectoryPicker = typeof (window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker === 'function';
 
+  const hasDirectoryPicker = isTauri || typeof (window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker === 'function';
+
+  // Load persisted paths on startup
   useEffect(() => {
-    if (!hasDirectoryPicker) return;
-    (async () => {
-      try {
-        const [p, b] = await Promise.all([idbGetDir(IDB_PRIMARY), idbGetDir(IDB_BACKUP)]);
-        if (p) {
-          const perm = await (p as unknown as { requestPermission?(o: object): Promise<string> }).requestPermission?.({ mode: 'readwrite' }) ?? 'granted';
-          if (perm === 'granted') setPrimaryHandle(p);
-        }
-        if (b) {
-          const perm = await (b as unknown as { requestPermission?(o: object): Promise<string> }).requestPermission?.({ mode: 'readwrite' }) ?? 'granted';
-          if (perm === 'granted') setBackupHandle(b);
-        }
-      } catch { /* permission denied or IDB error — silently ignore */ }
-    })();
-  }, [hasDirectoryPicker]);
-
-  const pickDir = async (): Promise<FileSystemDirectoryHandle | null> => {
-    try {
-      const handle = await (window as unknown as { showDirectoryPicker(o?: object): Promise<FileSystemDirectoryHandle> }).showDirectoryPicker({ mode: 'readwrite' });
-      return handle;
-    } catch (e) {
-      const err = e as Error;
-      if (err.name === 'AbortError') return null;
-      if (err.name === 'SecurityError') {
-        alert('Folder picker is not available inside the Replit preview pane. Open the app directly in a browser tab to set save folders.');
-        return null;
-      }
-      throw e;
+    if (isTauri) {
+      (async () => {
+        try {
+          const config = await tauriInvoke<{ primary?: string; backup?: string }>('get_folder_config');
+          if (config.primary) {
+            setPrimaryPath(config.primary);
+            getDiskInfo(config.primary).then(setPrimaryInfo);
+          }
+          if (config.backup) {
+            setBackupPath(config.backup);
+            getDiskInfo(config.backup).then(setBackupInfo);
+          }
+        } catch {}
+      })();
+    } else {
+      (async () => {
+        try {
+          const [p, b] = await Promise.all([idbGetDir(IDB_PRIMARY), idbGetDir(IDB_BACKUP)]);
+          if (p) {
+            const perm = await (p as unknown as { requestPermission?(o: object): Promise<string> }).requestPermission?.({ mode: 'readwrite' }) ?? 'granted';
+            if (perm === 'granted') setPrimaryHandle(p);
+          }
+          if (b) {
+            const perm = await (b as unknown as { requestPermission?(o: object): Promise<string> }).requestPermission?.({ mode: 'readwrite' }) ?? 'granted';
+            if (perm === 'granted') setBackupHandle(b);
+          }
+        } catch {}
+      })();
     }
+  }, []);
+
+  const persistConfig = async (primary: string | null, backup: string | null) => {
+    if (!isTauri) return;
+    await tauriInvoke('set_folder_config', { config: { primary, backup } }).catch(() => {});
   };
 
   const choosePrimary = async () => {
-    const h = await pickDir();
-    if (!h) return;
-    await idbSetDir(IDB_PRIMARY, h);
-    setPrimaryHandle(h);
+    if (isTauri) {
+      try {
+        const path = await tauriInvoke<string | null>('choose_save_folder');
+        if (!path) return;
+        setPrimaryPath(path);
+        getDiskInfo(path).then(setPrimaryInfo);
+        await persistConfig(path, backupPath);
+      } catch {}
+    } else {
+      try {
+        const handle = await (window as unknown as { showDirectoryPicker(o?: object): Promise<FileSystemDirectoryHandle> }).showDirectoryPicker({ mode: 'readwrite' });
+        await idbSetDir(IDB_PRIMARY, handle);
+        setPrimaryHandle(handle);
+      } catch (e) {
+        const err = e as Error;
+        if (err.name === 'AbortError') return;
+        if (err.name === 'SecurityError') alert('Folder picker unavailable in preview pane. Open in a full browser tab.');
+      }
+    }
   };
+
   const chooseBackup = async () => {
-    const h = await pickDir();
-    if (!h) return;
-    await idbSetDir(IDB_BACKUP, h);
-    setBackupHandle(h);
+    if (isTauri) {
+      try {
+        const path = await tauriInvoke<string | null>('choose_save_folder');
+        if (!path) return;
+        setBackupPath(path);
+        getDiskInfo(path).then(setBackupInfo);
+        await persistConfig(primaryPath, path);
+      } catch {}
+    } else {
+      try {
+        const handle = await (window as unknown as { showDirectoryPicker(o?: object): Promise<FileSystemDirectoryHandle> }).showDirectoryPicker({ mode: 'readwrite' });
+        await idbSetDir(IDB_BACKUP, handle);
+        setBackupHandle(handle);
+      } catch (e) {
+        const err = e as Error;
+        if (err.name === 'AbortError') return;
+        if (err.name === 'SecurityError') alert('Folder picker unavailable in preview pane. Open in a full browser tab.');
+      }
+    }
   };
-  const clearPrimary = async () => { await idbDeleteDir(IDB_PRIMARY); setPrimaryHandle(null); };
-  const clearBackup  = async () => { await idbDeleteDir(IDB_BACKUP);  setBackupHandle(null); };
+
+  const clearPrimary = async () => {
+    if (isTauri) {
+      setPrimaryPath(null);
+      setPrimaryInfo({ freeBytes: null, accessible: true });
+      await persistConfig(null, backupPath);
+    } else {
+      await idbDeleteDir(IDB_PRIMARY);
+      setPrimaryHandle(null);
+    }
+  };
+
+  const clearBackup = async () => {
+    if (isTauri) {
+      setBackupPath(null);
+      setBackupInfo({ freeBytes: null, accessible: true });
+      await persistConfig(primaryPath, null);
+    } else {
+      await idbDeleteDir(IDB_BACKUP);
+      setBackupHandle(null);
+    }
+  };
 
   const saveToFolders = async (blob: Blob, filename: string) => {
-    const writeToDir = async (dir: FileSystemDirectoryHandle): Promise<boolean> => {
-      try {
-        const fh = await dir.getFileHandle(filename, { create: true });
-        const writable = await fh.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        return true;
-      } catch { return false; }
-    };
-    const [savedPrimary, savedBackup] = await Promise.all([
-      primaryHandle ? writeToDir(primaryHandle) : Promise.resolve(false),
-      backupHandle  ? writeToDir(backupHandle)  : Promise.resolve(false),
-    ]);
+    let savedPrimary = false;
+    let savedBackup  = false;
+
+    if (isTauri) {
+      const saveTo = async (dir: string): Promise<boolean> => {
+        try {
+          const sep = dir.includes('\\') ? '\\' : '/';
+          const filePath = `${dir}${sep}${filename}`;
+          const ab = await blob.arrayBuffer();
+          const bytes = Array.from(new Uint8Array(ab));
+          await tauriInvoke('write_binary_file', { path: filePath, data: bytes });
+          return true;
+        } catch { return false; }
+      };
+      if (primaryPath) savedPrimary = await saveTo(primaryPath);
+      if (backupPath)  savedBackup  = await saveTo(backupPath);
+    } else {
+      const writeToDir = async (dir: FileSystemDirectoryHandle): Promise<boolean> => {
+        try {
+          const fh = await dir.getFileHandle(filename, { create: true });
+          const writable = await fh.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          return true;
+        } catch { return false; }
+      };
+      [savedPrimary, savedBackup] = await Promise.all([
+        primaryHandle ? writeToDir(primaryHandle) : Promise.resolve(false),
+        backupHandle  ? writeToDir(backupHandle)  : Promise.resolve(false),
+      ]);
+    }
+
     return { savedPrimary, savedBackup };
   };
 
-  return { primaryHandle, backupHandle, hasDirectoryPicker, choosePrimary, chooseBackup, clearPrimary, clearBackup, saveToFolders };
+  const primary: FolderEntry | null = isTauri && primaryPath
+    ? { path: primaryPath, name: pathToName(primaryPath), freeBytes: primaryInfo.freeBytes, accessible: primaryInfo.accessible }
+    : !isTauri && primaryHandle
+      ? { path: primaryHandle.name, name: primaryHandle.name, freeBytes: null, accessible: true }
+      : null;
+
+  const backup: FolderEntry | null = isTauri && backupPath
+    ? { path: backupPath, name: pathToName(backupPath), freeBytes: backupInfo.freeBytes, accessible: backupInfo.accessible }
+    : !isTauri && backupHandle
+      ? { path: backupHandle.name, name: backupHandle.name, freeBytes: null, accessible: true }
+      : null;
+
+  return {
+    primary, backup, hasDirectoryPicker,
+    choosePrimary, chooseBackup, clearPrimary, clearBackup, saveToFolders,
+    primaryPath, backupPath, primaryHandle, backupHandle,
+  };
 }
 
 // ─── SurePath connection status ───────────────────────────────────────────────
@@ -250,38 +386,85 @@ function usePassJudgeScores(passId: number | null) {
 type VideoMode = 'idle' | 'preview' | 'recording';
 
 export interface VideoDevice { deviceId: string; label: string; }
+export interface AudioDevice { deviceId: string; label: string; }
+
+/** ms elapsed since recording started, stamped when addMarker() is called */
+export type MarkerMs = number;
+
+function buildFilename(
+  skierName?: string | null,
+  division?: string | null,
+  rope?: number | null,
+  format: 'mp4' | 'webm' = 'webm',
+): { base: string; ext: string } {
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const parts: string[] = [];
+  if (skierName) parts.push(skierName.replace(/\s+/g, '-').replace(/[^A-Za-z0-9-]/g, ''));
+  if (division)  parts.push(division.replace(/\s+/g, '-'));
+  if (rope)      parts.push(`${rope}m`);
+  parts.push(ts);
+  const base = parts.join('-') || `slalom-${ts}`;
+  return { base, ext: format };
+}
 
 function useVideoRecorder() {
   const [mode, setMode] = useState<VideoMode>('idle');
   const [replayUrl, setReplayUrl] = useState<string | null>(null);
+  const [replayFilename, setReplayFilename] = useState<string | null>(null);
   const [showReplay, setShowReplay] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pipActive, setPipActive] = useState(false);
   const [devices, setDevices] = useState<VideoDevice[]>([]);
+  const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>(
     () => localStorage.getItem(LS_DEVICE_KEY) ?? ''
   );
+  const [audioEnabled, setAudioEnabled] = useState(false);
+  const [selectedAudioDeviceId, setSelectedAudioDeviceId] = useState<string>('');
+  const [markers, setMarkers] = useState<MarkerMs[]>([]);
+  const [ffmpegSavedPath, setFfmpegSavedPath] = useState<string | null>(null);
+
+  // Tauri-mode: native device lists from FFmpeg (device_name is what FFmpeg needs)
+  const [ffmpegVideoDevices, setFfmpegVideoDevices] = useState<{ deviceId: string; label: string; native_name: string }[]>([]);
+  const [ffmpegAudioDevices, setFfmpegAudioDevices] = useState<{ deviceId: string; label: string; native_name: string }[]>([]);
+  const [selectedFfmpegVideoName, setSelectedFfmpegVideoName] = useState<string>('0');
+  const [selectedFfmpegAudioName, setSelectedFfmpegAudioName] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  // Tauri mode: MJPEG preview displayed in an <img> element (not <video>)
+  const previewImgRef = useRef<HTMLImageElement>(null);
+  const PREVIEW_PORT = 9877;
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const blobRef = useRef<Blob | null>(null);
   const prevUrlRef = useRef<string | null>(null);
+  const recordingStartRef = useRef<number | null>(null);
+  const markersRef = useRef<MarkerMs[]>([]);
+  // Tauri/FFmpeg recording state
+  const isTauriRecordingRef = useRef(false);
+  const ffmpegOutputPathRef = useRef<string | null>(null);
 
-  // Enumerate video input devices — labels only available after permission
   const refreshDevices = useCallback(async () => {
     try {
       const all = await navigator.mediaDevices.enumerateDevices();
       const cams = all
         .filter(d => d.kind === 'videoinput')
         .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` }));
+      const mics = all
+        .filter(d => d.kind === 'audioinput')
+        .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Mic ${i + 1}` }));
       setDevices(cams);
+      setAudioDevices(mics);
       setSelectedDeviceId(prev => {
         const stored = localStorage.getItem(LS_DEVICE_KEY);
         if (stored && cams.find(c => c.deviceId === stored)) return stored;
         if (prev && cams.find(c => c.deviceId === prev)) return prev;
         return cams[0]?.deviceId ?? '';
+      });
+      setSelectedAudioDeviceId(prev => {
+        if (prev && mics.find(m => m.deviceId === prev)) return prev;
+        return mics[0]?.deviceId ?? '';
       });
     } catch {}
   }, []);
@@ -292,9 +475,53 @@ function useVideoRecorder() {
     return () => navigator.mediaDevices?.removeEventListener?.('devicechange', refreshDevices);
   }, [refreshDevices]);
 
+  // Tauri only: load native FFmpeg device names for capture
+  useEffect(() => {
+    if (!isTauri) return;
+    (async () => {
+      try {
+        const [vDevs, aDevs] = await Promise.all([
+          tauriInvoke<{ deviceId: string; label: string; native_name: string }[]>('list_video_devices'),
+          tauriInvoke<{ deviceId: string; label: string; native_name: string }[]>('list_audio_devices'),
+        ]);
+        setFfmpegVideoDevices(vDevs);
+        setFfmpegAudioDevices(aDevs);
+        if (vDevs.length > 0) setSelectedFfmpegVideoName(vDevs[0].native_name);
+        if (aDevs.length > 0) setSelectedFfmpegAudioName(aDevs[0].native_name);
+      } catch {}
+    })();
+  }, []);
+
   const startCamera = useCallback(async (deviceId?: string) => {
     setError(null);
     const targetDevice = deviceId ?? selectedDeviceId;
+
+    // ── Tauri mode: use FFmpeg MJPEG loopback for preview ─────────────────────
+    // FFmpeg captures directly from the native device (avfoundation/dshow/v4l2)
+    // and streams MJPEG over HTTP on 127.0.0.1:PREVIEW_PORT.  The WebView shows
+    // this via an <img> element, bypassing getUserMedia device-permission issues
+    // and surfacing capture cards (e.g. Elgato CamLink) that browsers may not enumerate.
+    if (isTauri) {
+      try {
+        // Stop any existing preview before restarting with new device
+        await tauriInvoke('stop_ffmpeg_preview').catch(() => {});
+        const deviceToUse = selectedFfmpegVideoName || '0';
+        await tauriInvoke('start_ffmpeg_preview', {
+          deviceName: deviceToUse,
+          previewPort: PREVIEW_PORT,
+        });
+        if (previewImgRef.current) {
+          // Append timestamp to force browser to reload the stream
+          previewImgRef.current.src = `http://127.0.0.1:${PREVIEW_PORT}/?t=${Date.now()}`;
+        }
+        setMode('preview');
+      } catch (err: any) {
+        setError(`FFmpeg preview failed: ${String(err)}`);
+      }
+      return;
+    }
+
+    // ── Browser mode: getUserMedia ─────────────────────────────────────────────
     try {
       streamRef.current?.getTracks().forEach(t => t.stop());
       streamRef.current = null;
@@ -304,7 +531,14 @@ function useVideoRecorder() {
       };
       if (targetDevice) videoConstraints.deviceId = { exact: targetDevice };
 
-      const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+      const audioConstraints: boolean | MediaTrackConstraints = audioEnabled
+        ? (selectedAudioDeviceId ? { deviceId: { exact: selectedAudioDeviceId } } : true)
+        : false;
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints,
+        audio: audioConstraints,
+      });
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -320,17 +554,75 @@ function useVideoRecorder() {
     } catch (err: any) {
       setError(err.message || 'Camera access denied');
     }
-  }, [selectedDeviceId, refreshDevices]);
+  }, [selectedDeviceId, selectedFfmpegVideoName, audioEnabled, selectedAudioDeviceId, refreshDevices]);
 
   const stopCamera = useCallback(() => {
+    if (isTauri) {
+      tauriInvoke('stop_ffmpeg_preview').catch(() => {});
+      if (previewImgRef.current) previewImgRef.current.src = '';
+    }
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
     setMode('idle');
   }, []);
 
-  const startRecording = useCallback(() => {
-    if (!streamRef.current || mode === 'recording') return;
+  const startRecording = useCallback(async (opts?: {
+    skierName?: string; division?: string; rope?: number;
+    /** Primary save folder path (Tauri mode) — if provided, FFmpeg writes directly to disk */
+    outputDir?: string | null;
+  }): Promise<boolean> => {
+    if (mode === 'recording') return false;
+    markersRef.current = [];
+    setMarkers([]);
+    recordingStartRef.current = Date.now();
+
+    // ── Tauri / FFmpeg path ────────────────────────────────────────────────────
+    if (isTauri && opts?.outputDir) {
+      // Stop standalone preview first — the recording process takes over camera +
+      // also serves MJPEG preview on the same port via its embedded HTTP server.
+      await tauriInvoke('stop_ffmpeg_preview').catch(() => {});
+
+      const { base, ext } = buildFilename(opts?.skierName, opts?.division, opts?.rope, 'mp4');
+      const filename = `${base}.${ext}`;
+      const sep = opts.outputDir.includes('\\') ? '\\' : '/';
+      const outputPath = `${opts.outputDir}${sep}${filename}`;
+      ffmpegOutputPathRef.current = outputPath;
+      isTauriRecordingRef.current = false; // will flip on success
+
+      try {
+        await tauriInvoke('start_ffmpeg_recording', {
+          outputPath,
+          deviceName: selectedFfmpegVideoName,
+          audioDeviceName: audioEnabled ? (selectedFfmpegAudioName ?? null) : null,
+          previewPort: PREVIEW_PORT,
+        });
+        isTauriRecordingRef.current = true;
+        // Keep the live preview feed pointing at the same port — now served by the recording process
+        if (previewImgRef.current) {
+          previewImgRef.current.src = `http://127.0.0.1:${PREVIEW_PORT}/?t=${Date.now()}`;
+        }
+        setReplayFilename(filename);
+        setMode('recording');
+        return true;
+      } catch (err: any) {
+        setError(`FFmpeg recording failed: ${String(err)}`);
+        recordingStartRef.current = null;
+        return false;
+      }
+    }
+
+    // ── Tauri with no save folder: block recording, surface explicit error ────────
+    // In Tauri mode, recordings must be MP4 via FFmpeg (WebM fallback is not supported).
+    // A primary save folder must be configured before recording can start.
+    if (isTauri) {
+      setError('Set a primary save folder before recording. Click the folder icon below.');
+      recordingStartRef.current = null;
+      return false;
+    }
+
+    // ── Browser / MediaRecorder fallback ──────────────────────────────────────
+    if (!streamRef.current) return false;
     chunksRef.current = [];
 
     const mimeType =
@@ -338,59 +630,192 @@ function useVideoRecorder() {
       MediaRecorder.isTypeSupported('video/webm;codecs=vp8') ? 'video/webm;codecs=vp8' :
       'video/webm';
 
+    const { base, ext } = buildFilename(opts?.skierName, opts?.division, opts?.rope, 'webm');
+    const filename = `${base}.${ext}`;
+
     try {
       const recorder = new MediaRecorder(streamRef.current, { mimeType });
       recorder.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       recorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: mimeType });
         blobRef.current = blob;
-        // Revoke previous replay URL
         if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current);
         const url = URL.createObjectURL(blob);
         prevUrlRef.current = url;
         setReplayUrl(url);
+        setReplayFilename(filename);
+        setMarkers([...markersRef.current]);
         setShowReplay(true);
-        // Stay on live preview — main video never switches to replay
         setMode(streamRef.current ? 'preview' : 'idle');
+        recordingStartRef.current = null;
       };
       recorder.start(100);
       recorderRef.current = recorder;
       setMode('recording');
+      return true;
     } catch (err: any) {
       setError(`Recording not supported: ${err.message}`);
+      return false;
     }
+  }, [mode, selectedDeviceId, audioEnabled, selectedAudioDeviceId, selectedFfmpegVideoName, selectedFfmpegAudioName]);
+
+  const stopRecording = useCallback(async () => {
+    if (isTauriRecordingRef.current) {
+      // ── Tauri / FFmpeg stop ────────────────────────────────────────────────
+      isTauriRecordingRef.current = false;
+      try {
+        await tauriInvoke('stop_ffmpeg_recording');
+      } catch {}
+
+      const outputPath = ffmpegOutputPathRef.current;
+      if (outputPath) {
+        setFfmpegSavedPath(outputPath);
+        setMarkers([...markersRef.current]);
+        // Convert the saved file path to a tauri:// asset URL for playback.
+        // Uses tauriConvertFileSrc which fails explicitly if the API is unavailable.
+        try {
+          const replayUrl = tauriConvertFileSrc(outputPath);
+          setReplayUrl(replayUrl);
+          setReplayFilename(outputPath.split(/[\\/]/).pop() ?? null);
+          setShowReplay(true);
+        } catch (err: any) {
+          setError(`Replay unavailable: ${err.message}`);
+        }
+      }
+
+      setMode('preview');
+      recordingStartRef.current = null;
+
+      // Restart MJPEG preview after recording ends so the user sees live camera
+      // while reviewing the replay in the panel above.
+      try {
+        await tauriInvoke('start_ffmpeg_preview', {
+          deviceName: selectedFfmpegVideoName,
+          previewPort: PREVIEW_PORT,
+        });
+        if (previewImgRef.current) {
+          previewImgRef.current.src = `http://127.0.0.1:${PREVIEW_PORT}/?t=${Date.now()}`;
+        }
+      } catch {}
+    } else {
+      // ── Browser / MediaRecorder stop ──────────────────────────────────────
+      recorderRef.current?.stop();
+      recorderRef.current = null;
+    }
+  }, [selectedFfmpegVideoName]);
+
+  const addMarker = useCallback(() => {
+    if (mode !== 'recording' || !recordingStartRef.current) return;
+    if (markersRef.current.length >= MAX_MARKERS) return;
+    const elapsed = Date.now() - recordingStartRef.current;
+    markersRef.current = [...markersRef.current, elapsed];
+    setMarkers([...markersRef.current]);
   }, [mode]);
 
-  const stopRecording = useCallback(() => {
-    recorderRef.current?.stop();
-    recorderRef.current = null;
-  }, []);
+  // M key shortcut for marking
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'm' || e.key === 'M') {
+        if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'TEXTAREA') return;
+        addMarker();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [addMarker]);
 
   const dismissReplay = useCallback(() => setShowReplay(false), []);
 
-  // Save to configured folders (primary + backup), falling back to browser download
-  const saveRecording = useCallback(async (
-    skierName?: string,
-    folderSave?: (blob: Blob, filename: string) => Promise<{ savedPrimary: boolean; savedBackup: boolean }> | null,
-  ) => {
-    if (!blobRef.current) return;
-    const filename = skierName
-      ? `${skierName.replace(/\s+/g, '-')}-${Date.now()}.webm`
-      : `slalom-${Date.now()}.webm`;
+  const saveRecording = useCallback(async (opts: {
+    filename?: string | null;
+    folderSave?: ((blob: Blob, filename: string) => Promise<{ savedPrimary: boolean; savedBackup: boolean }>) | null;
+    primaryPath?: string | null;
+    backupPath?: string | null;
+    markersToSave?: MarkerMs[];
+  } = {}) => {
+    const filename = opts.filename ?? replayFilename ?? `slalom-${Date.now()}.webm`;
 
-    if (folderSave) {
-      const { savedPrimary, savedBackup } = await folderSave(blobRef.current, filename);
-      if (savedPrimary || savedBackup) return; // at least one succeeded — done
+    // ── Tauri FFmpeg mode: primary file already on disk — copy to backup + write markers ──
+    if (ffmpegSavedPath) {
+      let savedBackup = false;
+
+      // Copy MP4 to backup folder if configured
+      if (opts.backupPath) {
+        const sep = opts.backupPath.includes('\\') ? '\\' : '/';
+        const backupFilePath = `${opts.backupPath}${sep}${filename}`;
+        savedBackup = await tauriInvoke<boolean>('copy_file', {
+          src: ffmpegSavedPath,
+          dst: backupFilePath,
+        }).then(() => true).catch(() => false);
+      }
+
+      // Write markers sidecar to primary + backup
+      if (opts.markersToSave && opts.markersToSave.length > 0) {
+        const markerData = JSON.stringify({
+          filename: ffmpegSavedPath.split(/[\\/]/).pop(),
+          markers: opts.markersToSave.map((ms, i) => ({
+            index: i, elapsed_ms: ms, label: `Marker ${i + 1}`,
+          })),
+        }, null, 2);
+        const markersFilename = filename.replace(/\.[^.]+$/, '') + '.markers.json';
+        const paths = [opts.primaryPath, opts.backupPath].filter(Boolean) as string[];
+        for (const dir of paths) {
+          const sep = dir.includes('\\') ? '\\' : '/';
+          await tauriInvoke('write_text_file', { path: `${dir}${sep}${markersFilename}`, content: markerData }).catch(() => {});
+        }
+      }
+
+      return { savedPrimary: true, savedBackup };
     }
 
-    // Standard download fallback (no folders set or write failed)
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blobRef.current);
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }, []);
+    if (!blobRef.current) return { savedPrimary: false, savedBackup: false };
+
+    let savedPrimary = false;
+    let savedBackup  = false;
+
+    if (opts.folderSave) {
+      const result = await opts.folderSave(blobRef.current, filename);
+      savedPrimary = result.savedPrimary;
+      savedBackup  = result.savedBackup;
+
+      // Write markers JSON sidecar
+      if (opts.markersToSave && opts.markersToSave.length > 0) {
+        const markerData = JSON.stringify({
+          filename,
+          markers: opts.markersToSave.map((ms, i) => ({
+            index: i,
+            elapsed_ms: ms,
+            label: `Marker ${i + 1}`,
+          })),
+        }, null, 2);
+
+        const markersFilename = filename.replace(/\.[^.]+$/, '') + '.markers.json';
+
+        if (isTauri) {
+          const paths = [opts.primaryPath, opts.backupPath].filter(Boolean) as string[];
+          for (const dir of paths) {
+            const sep = dir.includes('\\') ? '\\' : '/';
+            const markerPath = `${dir}${sep}${markersFilename}`;
+            await tauriInvoke('write_text_file', { path: markerPath, content: markerData }).catch(() => {});
+          }
+        }
+        // In browser mode, the recording goes to the browser's Downloads folder
+        // via a <a download> trigger — there is no reliable path to write a sidecar
+        // alongside it, so browser-mode markers are embedded in the toast description only.
+      }
+    }
+
+    if (!savedPrimary && !savedBackup) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blobRef.current);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    return { savedPrimary, savedBackup };
+  }, [replayFilename, ffmpegSavedPath]);
 
   const togglePiP = useCallback(async () => {
     if (!videoRef.current) return;
@@ -425,9 +850,24 @@ function useVideoRecorder() {
     if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current);
   }, []);
 
+  // Expose current FFmpeg output path so callers can auto-write markers at stop time
+  const getFfmpegOutputPath = useCallback(() => ffmpegOutputPathRef.current, []);
+
   return {
-    videoRef, mode, replayUrl, showReplay, error, pipActive,
-    devices, selectedDeviceId, setSelectedDeviceId,
+    videoRef,
+    // Tauri preview: MJPEG stream displayed in an <img> element
+    previewImgRef,
+    mode, replayUrl, replayFilename, showReplay, error, pipActive,
+    // Browser media devices
+    devices, audioDevices, selectedDeviceId, setSelectedDeviceId,
+    audioEnabled, setAudioEnabled, selectedAudioDeviceId, setSelectedAudioDeviceId,
+    // Tauri/FFmpeg native device lists
+    ffmpegVideoDevices, ffmpegAudioDevices,
+    selectedFfmpegVideoName, setSelectedFfmpegVideoName,
+    selectedFfmpegAudioName, setSelectedFfmpegAudioName,
+    markers, addMarker,
+    ffmpegSavedPath,
+    getFfmpegOutputPath,
     startCamera, stopCamera, startRecording, stopRecording,
     dismissReplay, saveRecording, togglePiP,
   };
@@ -442,7 +882,7 @@ interface VideoPanelProps {
 
 function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
   const { data: scores } = usePassJudgeScores(activePassId);
-  const { mode, videoRef, error, pipActive } = video;
+  const { mode, videoRef, previewImgRef, error, pipActive } = video;
 
   const ROLE_SHORT: Record<string, string> = {
     judge_a: 'A', judge_b: 'B', judge_c: 'C', judge_d: 'D', judge_e: 'E', chief_judge: 'CJ',
@@ -450,14 +890,31 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
 
   return (
     <div className="rounded-2xl overflow-hidden bg-black border shadow-2xl relative">
-      {/* Video element — always mounted */}
+      {/* Tauri mode: MJPEG preview via <img> element.
+          Shown in both preview AND recording states — the recording process
+          keeps the live feed alive via its embedded MJPEG HTTP server. */}
+      {isTauri && mode !== 'idle' && !video.showReplay && (
+        <img
+          ref={previewImgRef}
+          className="w-full aspect-video object-cover"
+          alt="Camera preview"
+          style={{ display: 'block' }}
+        />
+      )}
+
+      {/* Video element — used for: browser live preview + replay in all modes */}
       <video
         ref={videoRef}
         className="w-full aspect-video object-cover"
         playsInline
         autoPlay
         muted
-        style={{ display: mode === 'idle' ? 'none' : 'block' }}
+        style={{
+          display: (
+            // Show in browser mode when not idle, OR always for replay
+            (!isTauri && mode !== 'idle') || video.showReplay
+          ) ? 'block' : 'none',
+        }}
       />
 
       {/* Idle state */}
@@ -520,6 +977,23 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
                 LIVE
               </span>
             )}
+            {/* Audio indicator */}
+            {video.audioEnabled && (
+              <span className="flex items-center gap-1 bg-blue-600/80 backdrop-blur text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                <Mic className="w-2.5 h-2.5" />
+                <span className="flex gap-px items-end h-3">
+                  {[3, 5, 4, 6, 3].map((h, i) => (
+                    <span key={i} className="w-0.5 bg-white/80 rounded-full animate-pulse" style={{ height: `${h * 2}px`, animationDelay: `${i * 0.1}s` }} />
+                  ))}
+                </span>
+              </span>
+            )}
+            {/* Marker count badge during recording */}
+            {mode === 'recording' && video.markers.length > 0 && (
+              <span className="flex items-center gap-1 bg-amber-500/80 backdrop-blur text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                <BookmarkPlus className="w-2.5 h-2.5" /> {video.markers.length}/{MAX_MARKERS}
+              </span>
+            )}
           </div>
 
           {/* Skier name — top right (during recording) */}
@@ -539,6 +1013,20 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
                   <CheckCircle2 className="w-3 h-3 text-emerald-400" />
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Mark button — shown during recording, bottom center */}
+          {mode === 'recording' && (
+            <div className="absolute bottom-12 left-1/2 -translate-x-1/2">
+              <button
+                onClick={video.addMarker}
+                disabled={video.markers.length >= MAX_MARKERS}
+                title={`Mark timestamp (M key) — ${video.markers.length}/${MAX_MARKERS} markers`}
+                className="flex items-center gap-1.5 bg-amber-500/80 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed backdrop-blur text-white text-xs font-bold px-3 py-1.5 rounded-full transition-colors"
+              >
+                <BookmarkPlus className="w-3.5 h-3.5" /> Mark
+              </button>
             </div>
           )}
 
@@ -583,134 +1071,361 @@ function VideoPanel({ video, activePassId, activePassName }: VideoPanelProps) {
   );
 }
 
-// ─── Replay Slide Panel ────────────────────────────────────────────────────────
-interface ReplaySlidePanelProps {
+// ─── Enhanced Replay Player ───────────────────────────────────────────────────
+function fmtMs(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${sec.toString().padStart(2, '0')}`;
+}
+
+const FRAME_MS = 1000 / 60; // 60fps frame step — matches target recording framerate
+
+interface ReplayPlayerProps {
   replayUrl: string | null;
+  filename: string | null;
+  markers: MarkerMs[];
   open: boolean;
   onClose: () => void;
   onSave: () => void | Promise<void>;
   skierName?: string | null;
 }
 
-function ReplaySlidePanel({ replayUrl, open, onClose, onSave, skierName }: ReplaySlidePanelProps) {
+function ReplayPlayer({ replayUrl, filename, markers, open, onClose, onSave, skierName }: ReplayPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const timelineRef = useRef<HTMLDivElement>(null);
   const [rate, setRate] = useState(1);
-  const [playing, setPlaying] = useState(true);
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [loopA, setLoopA] = useState<number | null>(null);
+  const [loopB, setLoopB] = useState<number | null>(null);
+  const [loopActive, setLoopActive] = useState(false);
 
-  // When opened or URL changes, load the replay
   useEffect(() => {
     if (!open || !replayUrl || !videoRef.current) return;
     videoRef.current.src = replayUrl;
+    videoRef.current.load();
     videoRef.current.playbackRate = 1;
-    videoRef.current.play().catch(() => {});
     setRate(1);
-    setPlaying(true);
+    setPlaying(false);
+    setCurrentTime(0);
+    setLoopA(null);
+    setLoopB(null);
+    setLoopActive(false);
   }, [open, replayUrl]);
+
+  const handleTimeUpdate = () => {
+    if (!videoRef.current) return;
+    const ct = videoRef.current.currentTime;
+    setCurrentTime(ct);
+    // Loop between markers
+    if (loopActive && loopA !== null && loopB !== null) {
+      const bSec = loopB / 1000;
+      if (ct >= bSec) {
+        videoRef.current.currentTime = loopA / 1000;
+      }
+    }
+  };
+
+  const handleLoadedMetadata = () => {
+    if (videoRef.current) setDuration(videoRef.current.duration);
+  };
+
+  const handleEnded = () => setPlaying(false);
+  const handlePlay = () => setPlaying(true);
+  const handlePause = () => setPlaying(false);
+
+  const togglePlay = () => {
+    if (!videoRef.current) return;
+    if (videoRef.current.paused) { videoRef.current.play(); }
+    else { videoRef.current.pause(); }
+  };
 
   const changeRate = (r: number) => {
     setRate(r);
     if (videoRef.current) videoRef.current.playbackRate = r;
   };
 
-  const restart = () => {
+  const stepFrame = (dir: 1 | -1) => {
     if (!videoRef.current) return;
-    videoRef.current.currentTime = 0;
-    videoRef.current.play().catch(() => {});
-    setPlaying(true);
+    videoRef.current.pause();
+    videoRef.current.currentTime = Math.max(0, Math.min(duration, videoRef.current.currentTime + dir * FRAME_MS / 1000));
   };
 
-  const togglePlay = () => {
+  const stepHalfSec = (dir: 1 | -1) => {
     if (!videoRef.current) return;
-    if (videoRef.current.paused) { videoRef.current.play(); setPlaying(true); }
-    else { videoRef.current.pause(); setPlaying(false); }
+    videoRef.current.pause();
+    videoRef.current.currentTime = Math.max(0, Math.min(duration, videoRef.current.currentTime + dir * 0.5));
   };
+
+  const seekTo = (t: number) => {
+    if (!videoRef.current) return;
+    videoRef.current.currentTime = Math.max(0, Math.min(duration, t));
+  };
+
+  const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!timelineRef.current || !duration) return;
+    const rect = timelineRef.current.getBoundingClientRect();
+    const ratio = (e.clientX - rect.left) / rect.width;
+    seekTo(ratio * duration);
+  };
+
+  const toggleLoopMarker = (markerMs: number) => {
+    if (loopA === null) {
+      setLoopA(markerMs);
+    } else if (loopB === null && markerMs !== loopA) {
+      const [a, b] = [Math.min(loopA, markerMs), Math.max(loopA, markerMs)];
+      setLoopA(a);
+      setLoopB(b);
+      setLoopActive(true);
+    } else {
+      setLoopA(null);
+      setLoopB(null);
+      setLoopActive(false);
+    }
+  };
+
+  // Keyboard navigation
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        e.shiftKey ? stepHalfSec(-1) : stepFrame(-1);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        e.shiftKey ? stepHalfSec(1) : stepFrame(1);
+      } else if (e.key === ' ') {
+        e.preventDefault();
+        togglePlay();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, duration, loopActive, loopA, loopB]);
+
+  const progress = duration > 0 ? currentTime / duration : 0;
 
   return (
     <>
-      {/* Backdrop */}
       {open && (
-        <div
-          className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm"
-          onClick={onClose}
-        />
+        <div className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm" onClick={onClose} />
       )}
 
-      {/* Slide-up panel */}
       <div
-        className={`fixed bottom-0 left-0 right-0 z-50 transform transition-transform duration-400 ease-out ${open ? 'translate-y-0' : 'translate-y-full'}`}
-        style={{ maxHeight: '90vh' }}
+        className={`fixed bottom-0 left-0 right-0 z-50 transform transition-transform duration-300 ease-out ${open ? 'translate-y-0' : 'translate-y-full'}`}
+        style={{ maxHeight: '92vh' }}
       >
-        <div className="bg-slate-900 border-t border-slate-700 rounded-t-3xl shadow-2xl flex flex-col" style={{ maxHeight: '90vh' }}>
+        <div className="bg-slate-900 border-t border-slate-700 rounded-t-3xl shadow-2xl flex flex-col" style={{ maxHeight: '92vh' }}>
           {/* Header */}
-          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700/60 shrink-0">
-            <div className="flex items-center gap-3">
-              <MonitorPlay className="w-5 h-5 text-blue-400" />
-              <div>
-                <p className="font-bold text-white text-sm">Instant Replay</p>
-                {skierName && <p className="text-slate-400 text-xs">{skierName}</p>}
+          <div className="flex items-center justify-between px-5 py-3 border-b border-slate-700/60 shrink-0">
+            <div className="flex items-center gap-3 min-w-0">
+              <MonitorPlay className="w-5 h-5 text-blue-400 shrink-0" />
+              <div className="min-w-0">
+                <p className="font-bold text-white text-sm leading-tight">Instant Replay</p>
+                {skierName && <p className="text-slate-400 text-xs truncate">{skierName}</p>}
               </div>
-              <span className="bg-blue-600/30 text-blue-300 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border border-blue-600/40">
+              <span className="bg-blue-600/30 text-blue-300 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border border-blue-600/40 shrink-0">
                 REVIEW
               </span>
+              {filename && (
+                <span className="text-slate-500 text-[10px] font-mono truncate hidden sm:block max-w-[200px]" title={filename}>
+                  {filename}
+                </span>
+              )}
             </div>
-            <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/10">
+            <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/10 shrink-0">
               <X className="w-5 h-5" />
             </button>
           </div>
 
           {/* Video */}
-          <div className="relative bg-black shrink-0">
+          <div className="relative bg-black shrink-0 cursor-pointer" onClick={togglePlay}>
             <video
               ref={videoRef}
               className="w-full"
-              style={{ maxHeight: '55vh', objectFit: 'contain' }}
+              style={{ maxHeight: '48vh', objectFit: 'contain' }}
               playsInline
-              onClick={togglePlay}
+              onTimeUpdate={handleTimeUpdate}
+              onLoadedMetadata={handleLoadedMetadata}
+              onEnded={handleEnded}
+              onPlay={handlePlay}
+              onPause={handlePause}
             />
             {!playing && (
-              <div
-                className="absolute inset-0 flex items-center justify-center bg-black/30 cursor-pointer"
-                onClick={togglePlay}
-              >
-                <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center backdrop-blur">
-                  <Play className="w-7 h-7 text-white fill-white ml-1" />
+              <div className="absolute inset-0 flex items-center justify-center bg-black/20 pointer-events-none">
+                <div className="w-14 h-14 rounded-full bg-white/20 flex items-center justify-center backdrop-blur">
+                  <Play className="w-6 h-6 text-white fill-white ml-0.5" />
                 </div>
               </div>
             )}
           </div>
 
-          {/* Controls */}
-          <div className="px-5 py-4 flex items-center justify-between gap-4 shrink-0">
-            {/* Playback controls */}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={restart}
-                className="flex items-center gap-1.5 text-slate-300 hover:text-white bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors"
+          {/* Timeline scrubber */}
+          <div className="px-5 pt-3 pb-1 shrink-0 space-y-1.5">
+            <div
+              ref={timelineRef}
+              className="relative h-6 flex items-center cursor-pointer group"
+              onClick={handleTimelineClick}
+            >
+              {/* Track */}
+              <div className="absolute inset-x-0 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                <div
+                  className="absolute inset-y-0 left-0 bg-blue-500 rounded-full"
+                  style={{ width: `${progress * 100}%` }}
+                />
+                {/* Loop region */}
+                {loopActive && loopA !== null && loopB !== null && duration > 0 && (
+                  <div
+                    className="absolute inset-y-0 bg-amber-400/30 border-x border-amber-400/60"
+                    style={{
+                      left: `${(loopA / 1000 / duration) * 100}%`,
+                      width: `${((loopB - loopA) / 1000 / duration) * 100}%`,
+                    }}
+                  />
+                )}
+              </div>
+              {/* Playhead */}
+              <div
+                className="absolute top-0 w-3 h-6 -ml-1.5 flex items-center justify-center pointer-events-none"
+                style={{ left: `${progress * 100}%` }}
               >
-                <RefreshCw className="w-3.5 h-3.5" /> Restart
+                <div className="w-3 h-3 rounded-full bg-white shadow ring-2 ring-blue-400" />
+              </div>
+              {/* Marker dots */}
+              {duration > 0 && markers.map((ms, i) => (
+                <button
+                  key={i}
+                  title={`Marker ${i + 1}: ${fmtMs(ms)} — click to set loop point`}
+                  onClick={e => { e.stopPropagation(); seekTo(ms / 1000); toggleLoopMarker(ms); }}
+                  className={`absolute top-0 w-3 h-6 -ml-1.5 flex items-center justify-center z-10 transition-transform hover:scale-125 ${
+                    (loopA === ms || loopB === ms) ? 'scale-125' : ''
+                  }`}
+                  style={{ left: `${(ms / 1000 / duration) * 100}%` }}
+                >
+                  <span className={`w-2.5 h-2.5 rounded-full border-2 ${
+                    loopA === ms ? 'bg-amber-400 border-amber-200' :
+                    loopB === ms ? 'bg-orange-400 border-orange-200' :
+                    'bg-emerald-400 border-emerald-200'
+                  }`} />
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+              <span>{fmtMs(currentTime * 1000)}</span>
+              <span>-{fmtMs(Math.max(0, (duration - currentTime) * 1000))}</span>
+              <span>{fmtMs(duration * 1000)}</span>
+            </div>
+          </div>
+
+          {/* Controls row */}
+          <div className="px-5 pb-4 flex items-center justify-between gap-3 shrink-0 flex-wrap">
+            {/* Step + play controls */}
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => stepHalfSec(-1)}
+                title="–0.5s (Shift+←)"
+                className="p-1.5 text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+              >
+                <SkipBack className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => stepFrame(-1)}
+                title="–1 frame (←)"
+                className="p-1.5 text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <button
+                onClick={togglePlay}
+                className="mx-1 p-2 bg-white/15 hover:bg-white/25 rounded-xl text-white transition-colors"
+              >
+                {playing
+                  ? <Square className="w-4 h-4 fill-white" />
+                  : <Play className="w-4 h-4 fill-white ml-0.5" />
+                }
+              </button>
+              <button
+                onClick={() => stepFrame(1)}
+                title="+1 frame (→)"
+                className="p-1.5 text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => stepHalfSec(1)}
+                title="+0.5s (Shift+→)"
+                className="p-1.5 text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+              >
+                <SkipForward className="w-4 h-4" />
               </button>
 
-              <div className="flex items-center gap-1 bg-white/10 rounded-lg px-2 py-1.5">
-                <Gauge className="w-3.5 h-3.5 text-slate-400 mr-1" />
-                {[0.25, 0.5, 1].map(r => (
+              {/* Speed selector */}
+              <div className="flex items-center gap-0.5 bg-white/5 rounded-lg px-1.5 py-1 ml-2">
+                <Gauge className="w-3.5 h-3.5 text-slate-500 mr-1" />
+                {[0.25, 0.5, 1, 2].map(r => (
                   <button
                     key={r}
                     onClick={() => changeRate(r)}
-                    className={`text-xs font-bold px-2 py-0.5 rounded transition-colors ${rate === r ? 'text-emerald-400 bg-emerald-400/20' : 'text-slate-400 hover:text-white'}`}
+                    className={`text-xs font-bold px-2 py-0.5 rounded transition-colors ${
+                      rate === r ? 'text-emerald-400 bg-emerald-400/20' : 'text-slate-400 hover:text-white'
+                    }`}
                   >
-                    {r === 1 ? '1×' : `${r}×`}
+                    {r}×
                   </button>
                 ))}
               </div>
+
+              {/* Loop toggle */}
+              {markers.length >= 2 && (
+                <button
+                  onClick={() => {
+                    if (loopActive) {
+                      setLoopActive(false);
+                      setLoopA(null);
+                      setLoopB(null);
+                    } else if (loopA !== null && loopB !== null) {
+                      setLoopActive(true);
+                    }
+                  }}
+                  title="Loop between two selected markers"
+                  className={`ml-1 p-1.5 rounded-lg transition-colors ${
+                    loopActive
+                      ? 'text-amber-400 bg-amber-400/20'
+                      : 'text-slate-400 hover:text-white bg-white/5 hover:bg-white/10'
+                  }`}
+                >
+                  <Repeat className="w-4 h-4" />
+                </button>
+              )}
             </div>
 
-            {/* Save */}
-            <button
-              onClick={onSave}
-              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-xl text-sm transition-colors"
-            >
-              <Download className="w-4 h-4" /> Save Recording
-            </button>
+            {/* Markers legend + Save */}
+            <div className="flex items-center gap-3">
+              {markers.length > 0 && (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {markers.map((ms, i) => (
+                    <button
+                      key={i}
+                      title={`Jump to marker ${i + 1}: ${fmtMs(ms)}`}
+                      onClick={() => seekTo(ms / 1000)}
+                      className="flex items-center gap-1 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold px-1.5 py-0.5 rounded-lg transition-colors"
+                    >
+                      M{i + 1} {fmtMs(ms)}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <button
+                onClick={onSave}
+                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-xl text-sm transition-colors shrink-0"
+              >
+                <Download className="w-4 h-4" /> Save Recording
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -921,58 +1636,89 @@ function JudgeConnectPanel({ tournament }: { tournament: any }) {
 }
 
 // ─── Save Folder Bar ─────────────────────────────────────────────────────────
+function formatBytes(bytes: number): string {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(0)} MB`;
+  return `${(bytes / 1e3).toFixed(0)} KB`;
+}
+
 function SaveFolderBar({ folders }: { folders: SaveFolders }) {
-  const { hasDirectoryPicker, primaryHandle, backupHandle, choosePrimary, chooseBackup, clearPrimary, clearBackup } = folders;
+  const { hasDirectoryPicker, primary, backup, choosePrimary, chooseBackup, clearPrimary, clearBackup } = folders;
 
   if (!hasDirectoryPicker) return null;
 
   const Row = ({
-    label, handle, onChoose, onClear,
+    label, entry, onChoose, onClear,
   }: {
     label: string;
-    handle: FileSystemDirectoryHandle | null;
+    entry: FolderEntry | null;
     onChoose: () => void;
     onClear: () => void;
-  }) => (
-    <div className="flex items-center gap-2 min-w-0">
-      <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-14 shrink-0">{label}</span>
-      {handle ? (
-        <>
-          <FolderOpen className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-          <span className="text-xs font-mono text-foreground truncate max-w-[160px]" title={handle.name}>{handle.name}</span>
-          <button
-            onClick={onChoose}
-            className="text-[10px] text-muted-foreground hover:text-foreground transition-colors shrink-0 underline underline-offset-2"
-          >
-            Change
-          </button>
-          <button
-            onClick={onClear}
-            className="text-[10px] text-muted-foreground hover:text-destructive transition-colors shrink-0"
-            title="Remove this folder"
-          >
-            <X className="w-3 h-3" />
-          </button>
-        </>
-      ) : (
-        <>
+  }) => {
+    const lowSpace = entry?.freeBytes !== null && entry?.freeBytes !== undefined && entry.freeBytes < FIVE_GB;
+    const offline  = entry !== null && !entry.accessible;
+
+    return (
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-14 shrink-0">{label}</span>
+        {entry ? (
+          <>
+            {offline ? (
+              <WifiOff className="w-3.5 h-3.5 text-red-500 shrink-0" title="Drive not found" />
+            ) : (
+              <FolderOpen className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+            )}
+            <span className={`text-xs font-mono truncate max-w-[140px] ${offline ? 'text-red-500' : 'text-foreground'}`} title={entry.path}>
+              {entry.name}
+            </span>
+            {offline && (
+              <span className="text-[9px] font-bold text-red-500 bg-red-500/10 border border-red-500/30 px-1.5 py-0.5 rounded shrink-0">
+                OFFLINE
+              </span>
+            )}
+            {!offline && entry.freeBytes !== null && (
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 flex items-center gap-0.5 ${
+                lowSpace
+                  ? 'text-amber-600 bg-amber-500/10 border border-amber-500/30'
+                  : 'text-muted-foreground bg-muted/60'
+              }`}>
+                {lowSpace && <AlertTriangle className="w-2.5 h-2.5" />}
+                <HardDrive className="w-2.5 h-2.5" />
+                {formatBytes(entry.freeBytes)} free
+              </span>
+            )}
+            <button
+              onClick={onChoose}
+              className="text-[10px] text-muted-foreground hover:text-foreground transition-colors shrink-0 underline underline-offset-2"
+            >
+              Change
+            </button>
+            <button
+              onClick={onClear}
+              className="text-[10px] text-muted-foreground hover:text-destructive transition-colors shrink-0"
+              title="Remove this folder"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </>
+        ) : (
           <button
             onClick={onChoose}
             className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors border border-dashed border-border rounded px-2 py-0.5"
           >
             <FolderPlus className="w-3.5 h-3.5" /> Set folder…
           </button>
-        </>
-      )}
-    </div>
-  );
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="border border-border rounded-xl px-3 py-2.5 space-y-1.5 bg-muted/30">
       <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Save Location</p>
-      <Row label="Primary" handle={primaryHandle} onChoose={choosePrimary} onClear={clearPrimary} />
-      <Row label="Backup"  handle={backupHandle}  onChoose={chooseBackup}  onClear={clearBackup} />
-      {!primaryHandle && !backupHandle && (
+      <Row label="Primary" entry={primary} onChoose={choosePrimary} onClear={clearPrimary} />
+      <Row label="Backup"  entry={backup}  onChoose={chooseBackup}  onClear={clearBackup} />
+      {!primary && !backup && (
         <p className="text-[10px] text-muted-foreground/70 pt-0.5">
           No folder set — recordings will download to your browser&apos;s download folder.
         </p>
@@ -1040,6 +1786,34 @@ export default function Recording() {
   // Capture skier name at pass-start so replay panel has it after pass ends
   const replaySkierName = useRef<string | undefined>(undefined);
 
+  // Wrapper that stops FFmpeg and immediately writes the .markers.json sidecar
+  // to both primary and backup paths. This satisfies the requirement that markers
+  // are persisted at recording-stop time, not only when the user clicks Save.
+  const handleStopRecording = useCallback(async () => {
+    const currentMarkers = video.markers;
+    const outputPath = video.getFfmpegOutputPath();
+    await video.stopRecording();
+
+    if (!isTauri || !outputPath || currentMarkers.length === 0) return;
+
+    const filename = outputPath.split(/[\\/]/).pop() ?? '';
+    const markerData = JSON.stringify({
+      filename,
+      markers: currentMarkers.map((ms, i) => ({
+        index: i, elapsed_ms: ms, label: `Marker ${i + 1}`,
+      })),
+    }, null, 2);
+    const markersFilename = filename.replace(/\.[^.]+$/, '') + '.markers.json';
+    const paths = [folders.primaryPath, folders.backupPath].filter(Boolean) as string[];
+    for (const dir of paths) {
+      const sep = dir.includes('\\') ? '\\' : '/';
+      await tauriInvoke('write_text_file', {
+        path: `${dir}${sep}${markersFilename}`,
+        content: markerData,
+      }).catch(() => {});
+    }
+  }, [video.markers, video.getFfmpegOutputPath, video.stopRecording, folders.primaryPath, folders.backupPath]);
+
   // Auto-start recording when pass starts, auto-stop when it ends
   useEffect(() => {
     const curr = activePass?.id ?? null;
@@ -1047,10 +1821,17 @@ export default function Recording() {
 
     if (curr && !prev && video.mode === 'preview') {
       replaySkierName.current = activePass?.skier_name ?? undefined;
-      video.startRecording();
-      toast({ title: "Recording started", description: activePass?.skier_name });
+      const skierName = activePass?.skier_name;
+      void video.startRecording({
+        skierName,
+        division: activePass?.division,
+        rope: activePass?.rope_length,
+        outputDir: folders.primaryPath,
+      }).then(started => {
+        if (started) toast({ title: "Recording started", description: skierName });
+      });
     } else if (!curr && prev && video.mode === 'recording') {
-      video.stopRecording();
+      handleStopRecording();
     }
 
     // Clear PB callout when a new pass starts
@@ -1173,6 +1954,12 @@ export default function Recording() {
     window.open(url, 'slalom-live', 'width=1280,height=720,menubar=no,toolbar=no,location=no,status=no');
   };
 
+  const openCameraOnlyView = () => {
+    const base = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
+    const url = `${window.location.origin}${base}/live?t=${activeTournamentId}&camera=1`;
+    window.open(url, 'slalom-camera', 'width=1920,height=1080,menubar=no,toolbar=no,location=no,status=no');
+  };
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -1197,6 +1984,15 @@ export default function Recording() {
             >
               <Square className="w-3.5 h-3.5" />
               {liteMode ? 'Lite ON' : 'Lite'}
+            </button>
+
+            {/* Camera-only view — suitable for second monitor */}
+            <button
+              onClick={openCameraOnlyView}
+              className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+              title="Open camera-only view with score overlay — drag to second monitor or capture card output"
+            >
+              <Video className="w-3.5 h-3.5" /> Camera Only
             </button>
 
             {/* Pop-out live view */}
@@ -1244,18 +2040,97 @@ export default function Recording() {
           {video.mode !== 'idle' && (
             <div className="flex items-center gap-2 flex-wrap">
               {video.mode === 'preview' && (
-                <Button variant="primary" size="sm" onClick={video.startRecording} className="flex items-center gap-2">
-                  <Circle className="w-3.5 h-3.5 fill-current" /> Record
+                <Button variant="primary" size="sm" onClick={() => video.startRecording({
+                  skierName: activePass?.skier_name,
+                  division: activePass?.division,
+                  rope: activePass?.rope_length,
+                  outputDir: folders.primaryPath,
+                })} className="flex items-center gap-2">
+                  <Circle className="w-3.5 h-3.5 fill-current" /> {isTauri && folders.primaryPath ? 'Record MP4' : 'Record'}
                 </Button>
               )}
               {video.mode === 'recording' && (
-                <Button variant="destructive" size="sm" onClick={video.stopRecording} className="flex items-center gap-2">
-                  <Square className="w-3.5 h-3.5 fill-current" /> Stop Recording
-                </Button>
+                <>
+                  <Button variant="destructive" size="sm" onClick={handleStopRecording} className="flex items-center gap-2">
+                    <Square className="w-3.5 h-3.5 fill-current" /> Stop Recording
+                  </Button>
+                  <button
+                    onClick={video.addMarker}
+                    disabled={video.markers.length >= MAX_MARKERS}
+                    title={`Mark (M key) — ${video.markers.length}/${MAX_MARKERS}`}
+                    className="flex items-center gap-1.5 bg-amber-500/15 hover:bg-amber-500/25 disabled:opacity-40 border border-amber-500/30 text-amber-600 dark:text-amber-400 text-xs font-bold px-2.5 py-1.5 rounded-lg transition-colors"
+                  >
+                    <BookmarkPlus className="w-3.5 h-3.5" /> Mark ({video.markers.length})
+                  </button>
+                </>
               )}
-              <span className="text-xs text-muted-foreground ml-1">
+
+              {/* Audio toggle + device picker */}
+              <div className="flex items-center gap-1.5 ml-auto flex-wrap">
+                {/* Tauri: FFmpeg video device selector */}
+                {isTauri && video.ffmpegVideoDevices.length > 1 && (
+                  <select
+                    value={video.selectedFfmpegVideoName}
+                    onChange={e => video.setSelectedFfmpegVideoName(e.target.value)}
+                    disabled={video.mode === 'recording'}
+                    title="FFmpeg capture device (used when recording MP4)"
+                    className="text-[11px] bg-muted border border-border text-foreground rounded px-1.5 py-1 focus:outline-none disabled:opacity-40 max-w-[160px] truncate"
+                  >
+                    {video.ffmpegVideoDevices.map(d => (
+                      <option key={d.deviceId} value={d.native_name}>{d.label}</option>
+                    ))}
+                  </select>
+                )}
+
+                <button
+                  onClick={() => {
+                    video.setAudioEnabled(!video.audioEnabled);
+                    if (!isTauri && video.mode !== 'idle') video.startCamera();
+                  }}
+                  disabled={video.mode === 'recording'}
+                  title={video.audioEnabled ? 'Disable audio capture' : 'Enable audio capture'}
+                  className={`flex items-center gap-1 text-xs font-bold px-2.5 py-1.5 rounded-lg border transition-colors disabled:opacity-40 ${
+                    video.audioEnabled
+                      ? 'bg-blue-500/15 border-blue-500/40 text-blue-600 dark:text-blue-400'
+                      : 'border-border text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {video.audioEnabled ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
+                  Audio
+                </button>
+
+                {/* Tauri: FFmpeg audio device selector */}
+                {isTauri && video.audioEnabled && video.ffmpegAudioDevices.length > 1 && (
+                  <select
+                    value={video.selectedFfmpegAudioName ?? ''}
+                    onChange={e => video.setSelectedFfmpegAudioName(e.target.value)}
+                    disabled={video.mode === 'recording'}
+                    className="text-[11px] bg-muted border border-border text-foreground rounded px-1.5 py-1 focus:outline-none disabled:opacity-40 max-w-[140px] truncate"
+                  >
+                    {video.ffmpegAudioDevices.map(d => (
+                      <option key={d.deviceId} value={d.native_name}>{d.label}</option>
+                    ))}
+                  </select>
+                )}
+
+                {/* Browser: audio device selector */}
+                {!isTauri && video.audioEnabled && video.audioDevices.length > 1 && (
+                  <select
+                    value={video.selectedAudioDeviceId}
+                    onChange={e => { video.setSelectedAudioDeviceId(e.target.value); }}
+                    disabled={video.mode === 'recording'}
+                    className="text-[11px] bg-muted border border-border text-foreground rounded px-1.5 py-1 focus:outline-none disabled:opacity-40 max-w-[140px] truncate"
+                  >
+                    {video.audioDevices.map(d => (
+                      <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              <span className="text-xs text-muted-foreground w-full">
                 {video.mode === 'preview' && 'Camera live — recording starts automatically when a pass begins'}
-                {video.mode === 'recording' && 'Recording… stops automatically when the pass ends — instant replay will appear'}
+                {video.mode === 'recording' && `Recording… press M to mark · ${video.markers.length} marker${video.markers.length !== 1 ? 's' : ''}`}
               </span>
             </div>
           )}
@@ -1456,19 +2331,41 @@ export default function Recording() {
         <DisputeModal passId={disputePassId} onClose={() => setDisputePassId(null)} />
       )}
 
-      {/* Replay slide-up panel — portal-style, appears over everything */}
-      <ReplaySlidePanel
+      {/* Enhanced replay player — portal-style, appears over everything */}
+      <ReplayPlayer
         replayUrl={video.replayUrl}
+        filename={video.replayFilename}
+        markers={video.markers}
         open={video.showReplay}
         onClose={video.dismissReplay}
         onSave={async () => {
-          const skierName = replaySkierName.current;
-          const hasFolders = folders.primaryHandle || folders.backupHandle;
-          await video.saveRecording(skierName, hasFolders ? folders.saveToFolders : null);
-          if (hasFolders) {
+          // Tauri FFmpeg mode: file is already on disk — just persist markers + show path
+          if (video.ffmpegSavedPath) {
+            await video.saveRecording({
+              primaryPath: folders.primaryPath,
+              backupPath: folders.backupPath,
+              markersToSave: video.markers,
+            });
+            const filename = video.ffmpegSavedPath.split(/[\\/]/).pop() ?? video.ffmpegSavedPath;
+            toast({
+              title: 'MP4 saved',
+              description: `${filename}${video.markers.length > 0 ? ` + ${video.markers.length} marker${video.markers.length !== 1 ? 's' : ''}` : ''}`,
+            });
+            return;
+          }
+
+          // Browser MediaRecorder mode: save blob to folder or trigger download
+          const hasFolders = !!(folders.primary || folders.backup);
+          const { savedPrimary, savedBackup } = await video.saveRecording({
+            folderSave: hasFolders ? folders.saveToFolders : null,
+            primaryPath: folders.primaryPath,
+            backupPath: folders.backupPath,
+            markersToSave: video.markers,
+          });
+          if (savedPrimary || savedBackup) {
             const parts: string[] = [];
-            if (folders.primaryHandle) parts.push(folders.primaryHandle.name);
-            if (folders.backupHandle) parts.push(`backup: ${folders.backupHandle.name}`);
+            if (savedPrimary && folders.primary) parts.push(folders.primary.name);
+            if (savedBackup  && folders.backup)  parts.push(`backup: ${folders.backup.name}`);
             toast({ title: 'Recording saved', description: parts.join(' · ') });
           }
         }}

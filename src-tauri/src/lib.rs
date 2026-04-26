@@ -5,10 +5,10 @@ use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+// ─── API Server sidecar state ─────────────────────────────────────────────────
+
 struct SidecarState {
     child: Mutex<Option<CommandChild>>,
-    /// Set to true once the app begins its shutdown sequence.
-    /// Prevents the crash-restart loop from firing after an intentional kill.
     shutting_down: AtomicBool,
 }
 
@@ -21,7 +21,42 @@ impl SidecarState {
     }
 }
 
-/// Returns the app data directory, creating it if needed.
+// ─── FFmpeg recording state ───────────────────────────────────────────────────
+
+struct FfmpegState {
+    child: Mutex<Option<CommandChild>>,
+    /// Stop flag for the in-process MJPEG HTTP server that runs during recording
+    recording_preview_stop_flag: Mutex<Option<Arc<AtomicBool>>>,
+}
+
+impl FfmpegState {
+    fn new() -> Self {
+        Self {
+            child: Mutex::new(None),
+            recording_preview_stop_flag: Mutex::new(None),
+        }
+    }
+}
+
+// ─── FFmpeg live preview state ────────────────────────────────────────────────
+
+struct FfmpegPreviewState {
+    child: Mutex<Option<CommandChild>>,
+    // Signals the HTTP server thread to exit
+    stop_flag: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
+}
+
+impl FfmpegPreviewState {
+    fn new() -> Self {
+        Self {
+            child: Mutex::new(None),
+            stop_flag: Mutex::new(None),
+        }
+    }
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
 fn get_app_data_dir(app: &AppHandle) -> std::path::PathBuf {
     let dir = app
         .path()
@@ -31,15 +66,15 @@ fn get_app_data_dir(app: &AppHandle) -> std::path::PathBuf {
     dir
 }
 
-/// Spawn the api-server sidecar.  Returns true on success.
-///
-/// In production the sidecar also serves the bundled frontend static files
-/// (passed via SERVE_STATIC + STATIC_DIR env vars) so that the Tauri window
-/// can load `http://localhost:3000` without cross-origin issues.
+fn folder_config_path(app: &AppHandle) -> std::path::PathBuf {
+    get_app_data_dir(app).join("folder_config.json")
+}
+
+// ─── API Server sidecar management ───────────────────────────────────────────
+
 fn spawn_sidecar(app: &AppHandle) -> bool {
     let state = app.state::<Arc<SidecarState>>();
 
-    // Do not restart if we are shutting down
     if state.shutting_down.load(Ordering::SeqCst) {
         eprintln!("[Sidecar] Shutdown in progress — not restarting");
         return false;
@@ -56,15 +91,11 @@ fn spawn_sidecar(app: &AppHandle) -> bool {
 
     let resource_dir = app.path().resource_dir().ok();
 
-    // Locate bundled static files (only present in production Tauri builds).
     let static_dir = resource_dir
         .as_ref()
         .map(|d| d.join("static"))
         .filter(|p| p.exists());
 
-    // Locate the pglite resource bundle so the SEA sidecar can resolve
-    // `require('@electric-sql/pglite')` without a local node_modules directory.
-    // NODE_PATH points to the directory that contains `@electric-sql/pglite/`.
     let pglite_node_path = resource_dir
         .as_ref()
         .map(|d| d.join("pglite"))
@@ -100,7 +131,6 @@ fn spawn_sidecar(app: &AppHandle) -> bool {
             }
             eprintln!("[Sidecar] api-server started on port {PORT}");
 
-            // Monitor sidecar output; auto-restart on unexpected termination.
             let app_handle = app.clone();
             let state_for_monitor = state.inner().clone();
             tauri::async_runtime::spawn(async move {
@@ -116,7 +146,6 @@ fn spawn_sidecar(app: &AppHandle) -> bool {
                             eprintln!("[Sidecar:err] {}", s.trim_end());
                         }
                         CommandEvent::Terminated(payload) => {
-                            // Check the shutdown flag before scheduling a restart
                             if state_for_monitor.shutting_down.load(Ordering::SeqCst) {
                                 eprintln!(
                                     "[Sidecar] api-server stopped (shutdown, code: {:?})",
@@ -151,8 +180,6 @@ fn spawn_sidecar(app: &AppHandle) -> bool {
 
 fn kill_sidecar(app: &AppHandle) {
     let state = app.state::<Arc<SidecarState>>();
-    // Signal that we are shutting down BEFORE killing the process so the
-    // monitor task sees the flag before processing the Terminated event.
     state.shutting_down.store(true, Ordering::SeqCst);
 
     let mut guard = state.child.lock().expect("Failed to lock sidecar state");
@@ -162,10 +189,663 @@ fn kill_sidecar(app: &AppHandle) {
     }
 }
 
+// ─── Basic commands ───────────────────────────────────────────────────────────
+
 #[tauri::command]
 fn get_server_port() -> String {
     "3000".to_string()
 }
+
+// ─── Native folder picker ─────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn choose_save_folder(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let folder = app
+        .dialog()
+        .file()
+        .blocking_pick_folder();
+
+    match folder {
+        Some(path) => Ok(Some(path.to_string())),
+        None => Ok(None),
+    }
+}
+
+// ─── Folder config persistence ────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_folder_config(app: AppHandle) -> serde_json::Value {
+    let path = folder_config_path(&app);
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        serde_json::from_str(&contents).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    }
+}
+
+#[tauri::command]
+fn set_folder_config(app: AppHandle, config: serde_json::Value) -> Result<(), String> {
+    let path = folder_config_path(&app);
+    let contents = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Serialization error: {e}"))?;
+    std::fs::write(&path, contents)
+        .map_err(|e| format!("Write error: {e}"))
+}
+
+// ─── Disk space ───────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_disk_space(path: String) -> Result<u64, String> {
+    use sysinfo::Disks;
+
+    let target = std::path::Path::new(&path);
+    let disks = Disks::new_with_refreshed_list();
+
+    let best = disks
+        .iter()
+        .filter(|d| target.starts_with(d.mount_point()))
+        .max_by_key(|d| d.mount_point().as_os_str().len());
+
+    match best {
+        Some(disk) => Ok(disk.available_space()),
+        None => Err(format!("No disk found for path: {path}")),
+    }
+}
+
+// ─── Path accessibility ───────────────────────────────────────────────────────
+
+#[tauri::command]
+fn check_path_accessible(path: String) -> bool {
+    std::path::Path::new(&path).exists()
+}
+
+// ─── File writing ─────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn write_text_file(path: String, content: String) -> Result<(), String> {
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir error: {e}"))?;
+    }
+    std::fs::write(&path, content).map_err(|e| format!("Write error: {e}"))
+}
+
+#[tauri::command]
+fn write_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir error: {e}"))?;
+    }
+    std::fs::write(&path, data).map_err(|e| format!("Write error: {e}"))
+}
+
+#[tauri::command]
+fn copy_file(src: String, dst: String) -> Result<(), String> {
+    if let Some(parent) = std::path::Path::new(&dst).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir error: {e}"))?;
+    }
+    std::fs::copy(&src, &dst)
+        .map(|_| ())
+        .map_err(|e| format!("Copy error: {e}"))
+}
+
+// ─── FFmpeg device enumeration ────────────────────────────────────────────────
+
+#[tauri::command]
+async fn list_video_devices(app: AppHandle) -> Result<Vec<serde_json::Value>, String> {
+    let output = run_ffmpeg_device_list(&app, "video").await?;
+    let devices = parse_ffmpeg_devices(&output, "video");
+    Ok(devices)
+}
+
+#[tauri::command]
+async fn list_audio_devices(app: AppHandle) -> Result<Vec<serde_json::Value>, String> {
+    let output = run_ffmpeg_device_list(&app, "audio").await?;
+    let devices = parse_ffmpeg_devices(&output, "audio");
+    Ok(devices)
+}
+
+async fn run_ffmpeg_device_list(app: &AppHandle, _kind: &str) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    let args = vec![
+        "-list_devices".to_string(),
+        "true".to_string(),
+        "-f".to_string(),
+        "dshow".to_string(),
+        "-i".to_string(),
+        "dummy".to_string(),
+    ];
+
+    #[cfg(target_os = "macos")]
+    let args = vec![
+        "-f".to_string(),
+        "avfoundation".to_string(),
+        "-list_devices".to_string(),
+        "true".to_string(),
+        "-i".to_string(),
+        "\"\"".to_string(),
+    ];
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let args = vec![
+        "-list_devices".to_string(),
+        "true".to_string(),
+        "-f".to_string(),
+        "v4l2".to_string(),
+        "-i".to_string(),
+        "/dev/video0".to_string(),
+    ];
+
+    let cmd = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| format!("FFmpeg sidecar not found: {e}"))?;
+
+    let mut built = cmd;
+    for arg in &args {
+        built = built.args([arg]);
+    }
+
+    match built.output().await {
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            Ok(stderr)
+        }
+        Err(e) => Err(format!("FFmpeg execution error: {e}")),
+    }
+}
+
+fn parse_ffmpeg_devices(output: &str, kind: &str) -> Vec<serde_json::Value> {
+    let mut devices = Vec::new();
+    let mut in_section = false;
+    let section_marker = if kind == "video" { "video" } else { "audio" };
+
+    for line in output.lines() {
+        let lower = line.to_lowercase();
+
+        if lower.contains("directshow") || lower.contains("avfoundation") {
+            if lower.contains(section_marker) {
+                in_section = true;
+            } else {
+                in_section = false;
+            }
+        }
+
+        if in_section {
+            if let Some(start) = line.find('"') {
+                if let Some(end) = line[start + 1..].find('"') {
+                    let name = line[start + 1..start + 1 + end].to_string();
+                    if !name.is_empty() {
+                        let id = format!("{}:{}", kind, devices.len());
+                        devices.push(serde_json::json!({
+                            "deviceId": id,
+                            "label": name,
+                            "native_name": name,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    devices
+}
+
+// ─── FFmpeg recording ─────────────────────────────────────────────────────────
+
+/// Common MJPEG preview output args (appended after the MP4 output in all platforms).
+/// Scale is handled inside filter_complex (split → scale[vpreview]) so we do NOT
+/// use -vf here, which would conflict with -filter_complex named streams.
+fn mjpeg_preview_output_args() -> Vec<String> {
+    vec![
+        "-map".to_string(), "[vpreview]".to_string(),
+        "-an".to_string(),
+        "-c:v".to_string(), "mjpeg".to_string(),
+        "-q:v".to_string(), "8".to_string(),
+        "-f".to_string(), "mpjpeg".to_string(),
+        "pipe:1".to_string(),
+    ]
+}
+
+/// Build FFmpeg argv for concurrent recording + MJPEG preview via filter_complex split.
+/// The video is duplicated: [vrecord] → H.264 MP4 file, [vpreview] → MJPEG stdout.
+/// A single FFmpeg process handles both outputs, resolving the exclusive-device conflict
+/// that would arise from running separate recording and preview processes.
+
+#[cfg(target_os = "windows")]
+fn build_recording_argv(
+    device_name: &str,
+    audio_device_name: Option<&str>,
+    output_path: &str,
+) -> Vec<String> {
+    let mut args = vec![
+        "-f".to_string(), "dshow".to_string(),
+        "-framerate".to_string(), "60".to_string(),
+        "-video_size".to_string(), "1920x1080".to_string(),
+        "-i".to_string(), format!("video={}", device_name),
+    ];
+    if let Some(adev) = audio_device_name {
+        args.extend([
+            "-f".to_string(), "dshow".to_string(),
+            "-i".to_string(), format!("audio={}", adev),
+        ]);
+    }
+    args.extend([
+        "-filter_complex".to_string(), "[0:v]split=2[vrecord][vp_raw];[vp_raw]scale=1920:1080[vpreview]".to_string(),
+        "-map".to_string(), "[vrecord]".to_string(),
+    ]);
+    if let Some(_adev) = audio_device_name {
+        args.extend([
+            "-map".to_string(), "1:a".to_string(),
+            "-c:a".to_string(), "aac".to_string(),
+            "-b:a".to_string(), "192k".to_string(),
+        ]);
+    } else {
+        args.push("-an".to_string());
+    }
+    args.extend([
+        "-c:v".to_string(), "libx264".to_string(),
+        "-preset".to_string(), "veryfast".to_string(),
+        "-crf".to_string(), "18".to_string(),
+        "-pix_fmt".to_string(), "yuv420p".to_string(),
+        "-movflags".to_string(), "+faststart".to_string(),
+        "-y".to_string(),
+        output_path.to_string(),
+    ]);
+    args.extend(mjpeg_preview_output_args());
+    args
+}
+
+#[cfg(target_os = "macos")]
+fn build_recording_argv(
+    device_name: &str,
+    audio_device_name: Option<&str>,
+    output_path: &str,
+) -> Vec<String> {
+    let av_input = if let Some(adev) = audio_device_name {
+        format!("{}:{}", device_name, adev)
+    } else {
+        format!("{}:", device_name)
+    };
+    let mut args = vec![
+        "-f".to_string(), "avfoundation".to_string(),
+        "-framerate".to_string(), "60".to_string(),
+        "-video_size".to_string(), "1920x1080".to_string(),
+        "-i".to_string(), av_input,
+        "-filter_complex".to_string(), "[0:v]split=2[vrecord][vp_raw];[vp_raw]scale=1920:1080[vpreview]".to_string(),
+        "-map".to_string(), "[vrecord]".to_string(),
+    ];
+    if audio_device_name.is_some() {
+        // avfoundation combined input: audio is 0:a
+        args.extend([
+            "-map".to_string(), "0:a".to_string(),
+            "-c:a".to_string(), "aac".to_string(),
+            "-b:a".to_string(), "192k".to_string(),
+        ]);
+    } else {
+        args.push("-an".to_string());
+    }
+    args.extend([
+        "-c:v".to_string(), "libx264".to_string(),
+        "-preset".to_string(), "veryfast".to_string(),
+        "-crf".to_string(), "18".to_string(),
+        "-pix_fmt".to_string(), "yuv420p".to_string(),
+        "-movflags".to_string(), "+faststart".to_string(),
+        "-y".to_string(),
+        output_path.to_string(),
+    ]);
+    args.extend(mjpeg_preview_output_args());
+    args
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn build_recording_argv(
+    device_name: &str,
+    _audio_device_name: Option<&str>,
+    output_path: &str,
+) -> Vec<String> {
+    let mut args = vec![
+        "-f".to_string(), "v4l2".to_string(),
+        "-framerate".to_string(), "60".to_string(),
+        "-video_size".to_string(), "1920x1080".to_string(),
+        "-i".to_string(), device_name.to_string(),
+        "-filter_complex".to_string(), "[0:v]split=2[vrecord][vp_raw];[vp_raw]scale=1920:1080[vpreview]".to_string(),
+        "-map".to_string(), "[vrecord]".to_string(),
+        "-an".to_string(),
+        "-c:v".to_string(), "libx264".to_string(),
+        "-preset".to_string(), "veryfast".to_string(),
+        "-crf".to_string(), "18".to_string(),
+        "-pix_fmt".to_string(), "yuv420p".to_string(),
+        "-movflags".to_string(), "+faststart".to_string(),
+        "-y".to_string(),
+        output_path.to_string(),
+    ];
+    args.extend(mjpeg_preview_output_args());
+    args
+}
+
+#[tauri::command]
+async fn start_ffmpeg_recording(
+    app: AppHandle,
+    output_path: String,
+    device_name: String,
+    audio_device_name: Option<String>,
+    preview_port: u16,
+    state: tauri::State<'_, Arc<FfmpegState>>,
+) -> Result<(), String> {
+    {
+        let guard = state.child.lock().map_err(|e| e.to_string())?;
+        if guard.is_some() {
+            return Err("FFmpeg recording already in progress".to_string());
+        }
+    }
+
+    if let Some(parent) = std::path::Path::new(&output_path).parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+
+    let ffmpeg_args = build_recording_argv(
+        &device_name,
+        audio_device_name.as_deref(),
+        &output_path,
+    );
+
+    let cmd = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| format!("FFmpeg sidecar not found: {e}"))?
+        .args(&ffmpeg_args);
+
+    let (mut rx, child) = cmd.spawn().map_err(|e| format!("Failed to start FFmpeg: {e}"))?;
+
+    // mpsc channel bridges async tokio (FFmpeg stdout events) → sync thread (HTTP server)
+    let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(60);
+
+    // Tokio task: forward stdout bytes (MJPEG stream) to the HTTP server thread
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            if let CommandEvent::Stdout(bytes) = event {
+                if frame_tx.send(bytes).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let stop_flag_clone = stop_flag.clone();
+
+    {
+        let mut guard = state.child.lock().map_err(|e| e.to_string())?;
+        *guard = Some(child);
+        let mut sf = state.recording_preview_stop_flag.lock().map_err(|e| e.to_string())?;
+        *sf = Some(stop_flag);
+    }
+
+    // Spawn the embedded MJPEG HTTP server for the recording preview
+    std::thread::spawn(move || {
+        use std::io::Write;
+        let listener = match std::net::TcpListener::bind(format!("127.0.0.1:{}", preview_port)) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[RecordingPreview] Failed to bind port {}: {}", preview_port, e);
+                return;
+            }
+        };
+        listener.set_nonblocking(true).ok();
+        eprintln!("[RecordingPreview] MJPEG HTTP server on 127.0.0.1:{}", preview_port);
+
+        'accept: loop {
+            if stop_flag_clone.load(Ordering::SeqCst) { break; }
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).ok();
+                    let header = concat!(
+                        "HTTP/1.0 200 OK\r\n",
+                        "Content-Type: multipart/x-mixed-replace;boundary=ffmpeg\r\n",
+                        "Cache-Control: no-cache, no-store, must-revalidate\r\n",
+                        "Pragma: no-cache\r\n",
+                        "\r\n"
+                    );
+                    if stream.write_all(header.as_bytes()).is_err() { continue 'accept; }
+                    loop {
+                        if stop_flag_clone.load(Ordering::SeqCst) { break 'accept; }
+                        match frame_rx.recv_timeout(Duration::from_secs(5)) {
+                            Ok(bytes) => {
+                                if stream.write_all(&bytes).is_err() { break; }
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                            Err(_) => break 'accept,
+                        }
+                    }
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        }
+        eprintln!("[RecordingPreview] MJPEG server stopped");
+    });
+
+    eprintln!("[FFmpeg] Recording started with embedded MJPEG preview on port {}", preview_port);
+    Ok(())
+}
+
+fn stop_ffmpeg_child(child: CommandChild) {
+    // Send 'q' + newline to FFmpeg's stdin for graceful shutdown so it can flush
+    // the MP4 container metadata (moov atom) before exiting.
+    // If stdin write fails (e.g. pipe already closed), fall back to SIGTERM/kill.
+    if child.write(b"q\n").is_err() {
+        child.kill().ok();
+    }
+    eprintln!("[FFmpeg] Recording stopped (graceful)");
+}
+
+#[tauri::command]
+fn stop_ffmpeg_recording(
+    state: tauri::State<'_, Arc<FfmpegState>>,
+) -> Result<(), String> {
+    // Signal the embedded MJPEG HTTP server to stop accepting new connections
+    if let Ok(mut sf) = state.recording_preview_stop_flag.lock() {
+        if let Some(flag) = sf.take() {
+            flag.store(true, Ordering::SeqCst);
+        }
+    }
+    let mut guard = state.child.lock().map_err(|e| e.to_string())?;
+    if let Some(child) = guard.take() {
+        stop_ffmpeg_child(child);
+    }
+    Ok(())
+}
+
+// ─── FFmpeg live preview (MJPEG over HTTP loopback) ──────────────────────────
+//
+// Runs FFmpeg writing -f mpjpeg to its stdout, which is forwarded over a raw
+// HTTP MJPEG stream on 127.0.0.1:preview_port.  The React WebView consumes it
+// via <img src="http://127.0.0.1:PORT/"> — browsers natively support MJPEG in
+// <img> tags via multipart/x-mixed-replace, so no JS decoding is needed.
+
+#[tauri::command]
+async fn start_ffmpeg_preview(
+    app: AppHandle,
+    device_name: String,
+    preview_port: u16,
+    state: tauri::State<'_, Arc<FfmpegPreviewState>>,
+) -> Result<(), String> {
+    {
+        let mut guard = state.child.lock().map_err(|e| e.to_string())?;
+        if guard.is_some() {
+            return Err("Preview already running".to_string());
+        }
+    }
+
+    // Build FFmpeg argv for MJPEG preview (input options before -i).
+    // Preview at 30fps 1920x1080 — sufficient for live view without the overhead
+    // of full 60fps, while meeting the 1080p live-panel requirement.
+    #[cfg(target_os = "windows")]
+    let ffmpeg_args: Vec<String> = vec![
+        "-f".to_string(), "dshow".to_string(),
+        "-framerate".to_string(), "30".to_string(),
+        "-video_size".to_string(), "1920x1080".to_string(),
+        "-i".to_string(), format!("video={}", device_name),
+        "-an".to_string(),
+        "-f".to_string(), "mpjpeg".to_string(),
+        "-q:v".to_string(), "8".to_string(),
+        "pipe:1".to_string(),
+    ];
+
+    #[cfg(target_os = "macos")]
+    let ffmpeg_args: Vec<String> = vec![
+        "-f".to_string(), "avfoundation".to_string(),
+        "-framerate".to_string(), "30".to_string(),
+        "-video_size".to_string(), "1920x1080".to_string(),
+        "-i".to_string(), format!("{}:", device_name),
+        "-an".to_string(),
+        "-f".to_string(), "mpjpeg".to_string(),
+        "-q:v".to_string(), "8".to_string(),
+        "pipe:1".to_string(),
+    ];
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let ffmpeg_args: Vec<String> = vec![
+        "-f".to_string(), "v4l2".to_string(),
+        "-framerate".to_string(), "30".to_string(),
+        "-video_size".to_string(), "1920x1080".to_string(),
+        "-i".to_string(), device_name.clone(),
+        "-an".to_string(),
+        "-f".to_string(), "mpjpeg".to_string(),
+        "-q:v".to_string(), "8".to_string(),
+        "pipe:1".to_string(),
+    ];
+
+    let cmd = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| format!("FFmpeg sidecar not found: {e}"))?
+        .args(&ffmpeg_args);
+
+    let (mut rx, child) = cmd.spawn().map_err(|e| format!("Failed to start FFmpeg preview: {e}"))?;
+
+    // mpsc channel bridges async tokio (FFmpeg stdout events) → sync thread (HTTP server)
+    let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(60);
+
+    // Tokio task: forward CommandEvent::Stdout bytes to the sync channel
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            if let CommandEvent::Stdout(bytes) = event {
+                if frame_tx.send(bytes).is_err() {
+                    break; // receiver dropped → HTTP server exited
+                }
+            }
+        }
+    });
+
+    let stop_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_flag_clone = stop_flag.clone();
+
+    {
+        let mut guard = state.child.lock().map_err(|e| e.to_string())?;
+        *guard = Some(child);
+        let mut sf = state.stop_flag.lock().map_err(|e| e.to_string())?;
+        *sf = Some(stop_flag);
+    }
+
+    // Spawn a dedicated OS thread for the HTTP MJPEG server so it can block on accept/recv
+    // without interfering with the Tokio runtime.
+    std::thread::spawn(move || {
+        use std::io::Write;
+
+        let listener = match std::net::TcpListener::bind(format!("127.0.0.1:{}", preview_port)) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[Preview] Failed to bind port {}: {}", preview_port, e);
+                return;
+            }
+        };
+        // Non-blocking accept loop so we can check the stop flag.
+        listener.set_nonblocking(true).ok();
+
+        eprintln!("[Preview] MJPEG HTTP server on 127.0.0.1:{}", preview_port);
+
+        'accept: loop {
+            if stop_flag_clone.load(Ordering::SeqCst) {
+                break;
+            }
+            match listener.accept() {
+                Ok((mut stream, _addr)) => {
+                    eprintln!("[Preview] Client connected");
+                    stream.set_nonblocking(false).ok();
+
+                    // Write HTTP MJPEG response header.  The body is the raw mpjpeg
+                    // stream from FFmpeg which already contains the MIME boundaries.
+                    // FFmpeg's -f mpjpeg emits "--ffmpeg" boundary tags by default,
+                    // so the Content-Type boundary MUST be "ffmpeg" to match.
+                    let header = concat!(
+                        "HTTP/1.0 200 OK\r\n",
+                        "Content-Type: multipart/x-mixed-replace;boundary=ffmpeg\r\n",
+                        "Cache-Control: no-cache, no-store, must-revalidate\r\n",
+                        "Pragma: no-cache\r\n",
+                        "\r\n"
+                    );
+                    if stream.write_all(header.as_bytes()).is_err() {
+                        continue 'accept;
+                    }
+
+                    // Pipe FFmpeg stdout bytes directly to the HTTP client.
+                    loop {
+                        if stop_flag_clone.load(Ordering::SeqCst) {
+                            break 'accept;
+                        }
+                        match frame_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                            Ok(bytes) => {
+                                if stream.write_all(&bytes).is_err() {
+                                    // Client disconnected; go back to waiting for next accept
+                                    break;
+                                }
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                // No bytes yet; check stop flag and loop
+                                continue;
+                            }
+                            Err(_) => break 'accept, // sender dropped
+                        }
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        }
+        eprintln!("[Preview] MJPEG HTTP server stopped");
+    });
+
+    eprintln!("[FFmpeg] Preview started on port {}", preview_port);
+    Ok(())
+}
+
+fn stop_ffmpeg_preview_inner(state: &Arc<FfmpegPreviewState>) {
+    if let Ok(mut guard) = state.child.lock() {
+        if let Some(child) = guard.take() {
+            stop_ffmpeg_child(child);
+        }
+    }
+    if let Ok(mut sf) = state.stop_flag.lock() {
+        if let Some(flag) = sf.take() {
+            flag.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+#[tauri::command]
+fn stop_ffmpeg_preview(state: tauri::State<'_, Arc<FfmpegPreviewState>>) -> Result<(), String> {
+    stop_ffmpeg_preview_inner(&state);
+    eprintln!("[FFmpeg] Preview stopped");
+    Ok(())
+}
+
+// ─── App entry point ─────────────────────────────────────────────────────────
 
 pub fn run() {
     tauri::Builder::default()
@@ -174,17 +854,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(Arc::new(SidecarState::new()))
+        .manage(Arc::new(FfmpegState::new()))
+        .manage(Arc::new(FfmpegPreviewState::new()))
         .setup(|app| {
             let handle = app.handle().clone();
-            // In debug / dev mode (`pnpm tauri dev`) the api-server is started
-            // by beforeDevCommand so we must NOT also spawn it as a sidecar —
-            // that would cause a port-3000 conflict.  The sidecar is only
-            // managed at runtime in production (release) builds.
             #[cfg(not(debug_assertions))]
             spawn_sidecar(&handle);
 
-            // Check for updates 5 seconds after startup so it does not delay
-            // the initial window paint.
             let updater_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(5)).await;
@@ -193,15 +869,43 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_server_port])
+        .invoke_handler(tauri::generate_handler![
+            get_server_port,
+            choose_save_folder,
+            get_folder_config,
+            set_folder_config,
+            get_disk_space,
+            check_path_accessible,
+            write_text_file,
+            write_binary_file,
+            copy_file,
+            list_video_devices,
+            list_audio_devices,
+            start_ffmpeg_recording,
+            stop_ffmpeg_recording,
+            start_ffmpeg_preview,
+            stop_ffmpeg_preview,
+        ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
             if let RunEvent::ExitRequested { .. } = event {
                 kill_sidecar(app);
+                // Gracefully stop any in-progress FFmpeg recording
+                let ffmpeg = app.state::<Arc<FfmpegState>>();
+                if let Ok(mut guard) = ffmpeg.child.lock() {
+                    if let Some(child) = guard.take() {
+                        stop_ffmpeg_child(child);
+                    }
+                }
+                // Stop any running FFmpeg preview + its HTTP server
+                let preview = app.state::<Arc<FfmpegPreviewState>>();
+                stop_ffmpeg_preview_inner(&preview);
             }
         });
 }
+
+// ─── Auto-updater ─────────────────────────────────────────────────────────────
 
 async fn check_for_updates(app: AppHandle) {
     use tauri_plugin_updater::UpdaterExt;

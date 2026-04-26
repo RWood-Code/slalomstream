@@ -43,7 +43,8 @@
       "pglite-resources": "pglite"
     },
     "externalBin": [
-      "binaries/api-server"
+      "binaries/api-server",
+      "binaries/ffmpeg"
     ],
     "windows": {
       "certificateThumbprint": null,
