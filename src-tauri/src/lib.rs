@@ -1156,20 +1156,20 @@ async fn spawn_cloudflared(
                             .emit("tunnel-stopped", serde_json::json!({ "reconnecting": true }))
                             .ok();
 
-                        // Reconnect after backoff unless shutdown was requested in the meantime.
-                        // We do the sleep + guard check in one spawned task, then spawn a second
-                        // task for the actual reconnect. This avoids awaiting spawn_cloudflared
-                        // inside the outer spawn, which would require the future to be Send (it
-                        // isn't, because CommandChild is not Send across an await point).
+                        // Reconnect after backoff. We use std::thread::spawn +
+                        // tauri::async_runtime::block_on rather than
+                        // tauri::async_runtime::spawn because spawn_cloudflared
+                        // is not Send (CommandChild holds non-Send internals
+                        // across await points). A plain OS thread has no Send
+                        // requirement on the future it drives.
                         let retry_handle = app_handle.clone();
                         let retry_state = state_monitor.clone();
                         let retry_token = token_for_retry.clone();
-                        tauri::async_runtime::spawn(async move {
-                            tokio::time::sleep(Duration::from_secs(5)).await;
+                        std::thread::spawn(move || {
+                            std::thread::sleep(Duration::from_secs(5));
                             if retry_state.shutting_down.load(Ordering::SeqCst) {
                                 return;
                             }
-                            // Guard against a race with another start_tunnel call
                             {
                                 let guard = retry_state.child.lock().unwrap();
                                 if guard.is_some() {
@@ -1177,10 +1177,14 @@ async fn spawn_cloudflared(
                                 }
                             }
                             eprintln!("[Tunnel] Attempting reconnect…");
-                            // Spawn a fresh top-level task for the reconnect so we don't
-                            // need to await a non-Send future here.
-                            tauri::async_runtime::spawn(async move {
-                                if let Err(e) = spawn_cloudflared(retry_handle, retry_token, retry_state).await {
+                            tauri::async_runtime::block_on(async move {
+                                if let Err(e) = spawn_cloudflared(
+                                    retry_handle,
+                                    retry_token,
+                                    retry_state,
+                                )
+                                .await
+                                {
                                     eprintln!("[Tunnel] Reconnect failed: {e}");
                                 }
                             });
