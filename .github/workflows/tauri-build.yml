@@ -50,7 +50,7 @@ jobs:
           version: 9
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --no-frozen-lockfile
 
       # Download the correct static FFmpeg binary for this platform and place it
       # in src-tauri/binaries/ with Tauri's sidecar naming convention so Tauri
