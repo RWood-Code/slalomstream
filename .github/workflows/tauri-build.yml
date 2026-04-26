@@ -52,6 +52,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      # Download the correct static FFmpeg binary for this platform and place it
+      # in src-tauri/binaries/ with Tauri's sidecar naming convention so Tauri
+      # will bundle it automatically during `tauri build`.
+      - name: Download FFmpeg sidecar
+        run: node scripts/download-ffmpeg.mjs ${{ matrix.target }}
+
       # Inject the real updater public key from GitHub Secrets into tauri.conf.json
       # at build time so the repository does not store the real key.
       # The admin must set TAURI_SIGNING_PUBLIC_KEY alongside TAURI_SIGNING_PRIVATE_KEY.
