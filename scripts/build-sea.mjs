@@ -34,8 +34,8 @@ const SEA_BLOB = resolve(ROOT, "sea-prep.blob");
 const PGLITE_DEST = resolve(ROOT, "src-tauri", "pglite-resources");
 
 if (!existsSync(DIST_CJS)) {
-  console.error(`api-server dist not found at ${DIST_CJS}`);
-  console.error("Run: pnpm --filter @workspace/api-server run build");
+  console.error(`\n[build-sea] ERROR: api-server dist not found at:\n  ${DIST_CJS}`);
+  console.error("[build-sea] Make sure this runs after: pnpm --filter @workspace/api-server run build\n");
   process.exit(1);
 }
 
@@ -50,25 +50,23 @@ const dbRequire = createRequire(
 let pgliteDir;
 try {
   const pgliteMain = dbRequire.resolve("@electric-sql/pglite");
-  // Walk up from dist/index.cjs to the package root (package.json is 3 levels up)
+  // Walk up from the resolved file to the package root (where package.json lives)
   let candidate = resolve(pgliteMain, "..", "..", "..");
   if (!existsSync(resolve(candidate, "package.json"))) {
     candidate = resolve(pgliteMain, "..", "..");
   }
   pgliteDir = candidate;
-  console.log(`Found pglite at: ${pgliteDir}`);
+  console.log(`[build-sea] Found pglite at: ${pgliteDir}`);
 } catch (e) {
   console.warn(
-    "WARNING: Could not resolve @electric-sql/pglite.\n",
-    e.message
+    "[build-sea] WARNING: Could not resolve @electric-sql/pglite.\n",
+    e.message,
+    "\n[build-sea] The sidecar will fail to load PGlite in Tauri production builds."
   );
 }
 
 // ── Stage pglite as a Tauri resource ─────────────────────────────────────────
 // Tauri bundles src-tauri/pglite-resources/ as the `pglite` resource dir.
-// lib.rs sets NODE_PATH=<resource_dir>/pglite so `require('@electric-sql/pglite')`
-// resolves to the bundled copy, and pglite's own __filename-based WASM lookup
-// resolves correctly against the resource dir path.
 if (pgliteDir) {
   const pgliteDest = resolve(PGLITE_DEST, "@electric-sql", "pglite");
   rmSync(PGLITE_DEST, { recursive: true, force: true });
@@ -77,10 +75,16 @@ if (pgliteDir) {
     recursive: true,
     filter: (src) => !src.includes("node_modules"),
   });
-  console.log(`Staged pglite → ${pgliteDest}`);
+  console.log(`[build-sea] Staged pglite → ${pgliteDest}`);
 } else {
-  console.warn(
-    "Skipping pglite staging — sidecar will fail to load PGlite in Tauri production builds."
+  // Create the directory anyway so Tauri doesn't fail trying to bundle it.
+  // The app will fail at runtime if pglite is actually needed, but the build
+  // will complete so CI can at least validate the packaging pipeline.
+  console.warn("[build-sea] Creating empty pglite-resources dir to satisfy Tauri bundle config.");
+  mkdirSync(resolve(PGLITE_DEST, "@electric-sql", "pglite"), { recursive: true });
+  writeFileSync(
+    resolve(PGLITE_DEST, "README.txt"),
+    "pglite was not found during build — this directory is a placeholder.\n"
   );
 }
 
@@ -104,9 +108,15 @@ try {
   }
 }
 
+// Allow explicit override via argument (e.g. for cross-compilation in CI)
+if (process.argv[2]) {
+  console.log(`[build-sea] Target triple overridden via argument: ${process.argv[2]}`);
+  targetTriple = process.argv[2];
+}
+
 if (!targetTriple) {
   console.error(
-    "Could not determine target triple. Ensure rustc is installed."
+    "[build-sea] ERROR: Could not determine target triple. Ensure rustc is installed."
   );
   process.exit(1);
 }
@@ -115,8 +125,8 @@ const ext = process.platform === "win32" ? ".exe" : "";
 const binaryName = `api-server-${targetTriple}${ext}`;
 const OUTPUT_BIN = resolve(BINARIES_DIR, binaryName);
 
-console.log(`\nBuilding SEA for target: ${targetTriple}`);
-console.log(`Output: ${OUTPUT_BIN}`);
+console.log(`\n[build-sea] Building SEA for target: ${targetTriple}`);
+console.log(`[build-sea] Output: ${OUTPUT_BIN}`);
 
 // ── Generate SEA blob ─────────────────────────────────────────────────────────
 writeFileSync(
@@ -168,12 +178,8 @@ if (process.platform === "darwin") {
 }
 
 // ── Cleanup ───────────────────────────────────────────────────────────────────
-try {
-  rmSync(SEA_CONFIG);
-} catch { /* ignore */ }
-try {
-  rmSync(SEA_BLOB);
-} catch { /* ignore */ }
+try { rmSync(SEA_CONFIG); } catch { /* ignore */ }
+try { rmSync(SEA_BLOB); } catch { /* ignore */ }
 
-console.log(`\nSEA binary created: ${OUTPUT_BIN}`);
-console.log("pglite staged at src-tauri/pglite-resources/ for Tauri resource bundling.");
+console.log(`\n[build-sea] SEA binary created: ${OUTPUT_BIN}`);
+console.log("[build-sea] pglite staged at src-tauri/pglite-resources/ for Tauri resource bundling.");
