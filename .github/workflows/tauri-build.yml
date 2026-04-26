@@ -172,6 +172,82 @@ jobs:
           "
       # ────────────────────────────────────────────────────────────────────────
 
+      # ── Windows code signing ─────────────────────────────────────────────────
+      # Prerequisites (GitHub Secrets that must be configured):
+      #
+      #   WINDOWS_CERTIFICATE          Base64-encoded Authenticode .pfx certificate.
+      #                                Export your code-signing cert from a certificate store
+      #                                or CA-provided .pfx, then encode it:
+      #                                  Windows:       certutil -encode MyCert.pfx encoded.txt
+      #                                  macOS / Linux: base64 -i MyCert.pfx | pbcopy
+      #
+      #   WINDOWS_CERTIFICATE_PASSWORD Password set when the .pfx was exported.
+
+      - name: Import Windows Authenticode certificate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $missing = @()
+          if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE))          { $missing += 'WINDOWS_CERTIFICATE' }
+          if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE_PASSWORD)) { $missing += 'WINDOWS_CERTIFICATE_PASSWORD' }
+          if ($missing.Count -gt 0) {
+            Write-Host "ERROR: the following GitHub Secrets are not configured: $($missing -join ', ')"
+            Write-Host ""
+            Write-Host "WINDOWS_CERTIFICATE: export your Authenticode .pfx and base64-encode it:"
+            Write-Host "  Windows:       certutil -encode MyCert.pfx encoded.txt"
+            Write-Host "  macOS / Linux: base64 -i MyCert.pfx | pbcopy"
+            Write-Host "WINDOWS_CERTIFICATE_PASSWORD: the password set when the .pfx was exported"
+            exit 1
+          }
+
+          # Strip PEM header/footer lines and all whitespace so the value is
+          # pure base64 regardless of how it was encoded (certutil -encode adds
+          # "-----BEGIN/END CERTIFICATE-----" lines and line breaks).
+          $rawBase64 = $env:WINDOWS_CERTIFICATE `
+            -replace '-----BEGIN[^-]*-----', '' `
+            -replace '-----END[^-]*-----',   '' `
+            -replace '\s',                   ''
+
+          # Decode the .pfx bytes and write to a temp file
+          $pfxPath = "$env:RUNNER_TEMP\certificate.pfx"
+          [System.Convert]::FromBase64String($rawBase64) |
+            Set-Content -Path $pfxPath -AsByteStream
+
+          # Import into CurrentUser\My so signtool.exe can find it by thumbprint
+          $securePassword = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate `
+            -FilePath $pfxPath `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -Password $securePassword
+
+          # Propagate the thumbprint to later steps via GITHUB_ENV (not logged)
+          "WINDOWS_CERT_THUMBPRINT=$($cert.Thumbprint)" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Windows Authenticode certificate imported successfully."
+
+          # Remove the decoded .pfx immediately
+          Remove-Item -Path $pfxPath -Force
+
+      - name: Inject Windows certificate thumbprint
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrEmpty($env:WINDOWS_CERT_THUMBPRINT)) {
+            Write-Host "ERROR: WINDOWS_CERT_THUMBPRINT is not set — certificate import may have failed."
+            exit 1
+          }
+          node -e "
+            const fs = require('fs');
+            const cfg = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+            cfg.bundle.windows.certificateThumbprint = process.env.WINDOWS_CERT_THUMBPRINT;
+            fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(cfg, null, 2));
+            console.log('Windows certificate thumbprint injected:', process.env.WINDOWS_CERT_THUMBPRINT);
+          "
+      # ────────────────────────────────────────────────────────────────────────
+
       - name: Build Tauri app and publish release
         uses: tauri-apps/tauri-action@v0
         env:
