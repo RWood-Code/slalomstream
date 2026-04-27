@@ -1,5 +1,5 @@
 # =============================================================================
-# SlalomStream — Tauri desktop build (Windows + macOS)
+# SlalomStream — Tauri desktop build (Windows only)
 #
 # Triggers:
 #   - Push of a `v*` tag (e.g. `v2.1.0`) → cuts a full signed release
@@ -52,12 +52,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
-            target: aarch64-apple-darwin
-            args: "--target aarch64-apple-darwin"
-          - platform: macos-13
-            target: x86_64-apple-darwin
-            args: "--target x86_64-apple-darwin"
           - platform: windows-latest
             target: ""
             args: ""
@@ -344,7 +338,7 @@ jobs:
             console.log(`Added platform: ${platform} → ${installer}`);
           }
 
-          const REQUIRED = ['darwin-aarch64', 'darwin-x86_64', 'windows-x86_64'];
+          const REQUIRED = ['windows-x86_64'];
           const missing = REQUIRED.filter(p => !platforms[p]);
           if (missing.length > 0) {
             console.error('ERROR: update.json is missing required platforms:', missing);
